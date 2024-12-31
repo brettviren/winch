@@ -1,0 +1,51 @@
+#+title: winch 󱁉🧵 Wide Image Node Container Harness
+
+*winch* helps build a set of container images that span a "wide" parameter space.
+
+The user provides a simple, high level configuration written in TOML that
+describes a number of "kinds" of container images.  Each "kind" defines a set of
+parameters.  A parameter value may be a string which can embed Python ~"{format}"~
+type markup or a parameter may be a multi-valued list-of-string, with each
+element representing one possible value.  A "kind" may have zero or more parent
+kinds, each representing one possible parent.
+
+*winch* will derive from each "kind" a number of concrete or "instance" parameter
+sets that span the outer product of all possible parents and all possible
+multi-valued parameters.  Each instance has any ~"{format}"~ markup interpolated
+against that instance's parameters and the parameters of its single parent
+instance (if one exists).
+
+*winch* was initially intended for generating ~Containerfile~ content for feeding to
+~podman~ for the purpose of providing environments to test the [[https://github.com/wirecell/wire-cell-toolkit][Wire-Cell Toolkit]]
+(thus the real reason for the "w" in *winch*) but there are no conceptual nor code
+dependencies on this toolkit.  You may use *worch* to build arbitrary graphs of
+container image layers.  For this purpose, *winch* will look for the ~containerfile~
+parameter in a "kind" (and ultimately in an instance) and will run ~podman~ to
+instantiate it.  *winch* also provides support to run ~podman~ to automatically
+generate any missing parent layers.
+
+Furthermore, you may use *winch* for constructing parameter sets and text content
+for arbitrary purposes where its graph-based outer-product generation scheme is
+relevant.
+
+* Reserved parameters
+
+*winch* reserves the following parameter names:
+
+- ~parent_kind~ :: (optional) names any other parameter sets considered to provide potential parents.
+- ~parent~ :: (implicit) provided during I-node string interpolation and contains the parameter set from a parent I-node.  I it is a dictionary and may be used in a string like ~"{parent[release]}"~.
+
+In addition these parameters will guide building the internal graph.  If they are not provided, an identifier is generated based on the K-node name and a hash of the parameter set.
+
+- ~inode~ :: (optional) provide the "name" part of an I-node identifier
+- ~anode~ :: (optional) provide the "name" part of an A-node identifier.  
+- ~kind~ :: (implicit) the name of the K-node from which a node most directly derives
+
+
+* Installation and usage
+
+* Development and updating
+
+
+
+

@@ -1,0 +1,129 @@
+digraph winch {
+    // Nodes given in configuration
+    node[shape=box,color=black,penwidth=4]
+    KD[label="K\nDebian Base \nrelease=[bookworm,trixie]"]
+    KDm[label="K\nDebian Minimal "]
+    KA[label="K\nAlma Base \nrelease=[9,10]"]
+    KAm[label="K\nAlma Minimal "]
+    KS[label="K\nSpack Base "]
+    KSm[label="K\nSpack Minimal \nversion=[master,0.29.5]"]
+    KSd[label="K\nSpack Dev \ngitref=[master,apply-pointcloud]"]
+
+    edge[label="K",color=black,penwidth=4]
+    KD -> KDm -> KS
+    KA -> KAm -> KS
+    KS -> KSm -> KSd
+
+    // Abstract (A) nodes are intermediate expansions of a K node generated with
+    // the cross-product of all the list-of-string prarams in the K node.  If
+    // the K node parameters are all scalar then the K node is promoted to an A
+    // node.
+    node[shape=Mrecord,penwidth=1,color=forestgreen]
+    ADb[label="A\nDebian Base \nrelease=bookworm"]
+    ADt[label="A\nDebian Base \nrelease=trixie"]
+    ADm[label="A\nDebian Minimal "]
+
+    AAn[label="A\nAlma Base \nrelease=9"]
+    AAt[label="A\nAlma Base \nrelease=10"]
+    AAm[label="A\nAlma Minimal "]
+
+    AS[label="A\nSpack Base "]
+    ASmm[label="A\nSpack Minimal \nversion=master"]
+    ASmt[label="A\nSpack Minimal \nversion=0.29.5"]
+    ASdm[label="A\nSpack Dev \ngitref=master"]
+    ASda[label="A\nSpack Dev \ngitref=apply-pointcloud"]
+
+    edge[label="A",color=black,penwidth=1]
+    KD->ADb
+    KD->ADt
+    KDm->ADm
+    KA->AAn
+    KA->AAt
+
+    KAm->AAm
+    KS->AS
+    KSm->ASmm
+    KSm->ASmt
+    KSd->ASdm
+    KSd->ASda
+
+    // Instance (I) nodes are formed from one A node and one other I node from
+    // the set of I nodes in an A node of the parent K node....
+    node[shape=ellipse,penwidth=2,color=red]
+
+    IDb[label="I\nDebian\nBase\nbookworm"]
+    IDt[label="I\nDebian\nBase\ntrixie"]
+    IDmb[label="I\nDebian\nMinimal\nbookworm"]
+    IDmt[label="I\nDebian\nMinimal\ntrixie"]
+    IDmbS[label="I\nDebian\nMinimal\nbookworm\nSpack Base"]
+    IDmtS[label="I\nDebian\nMinimal\ntrixie\nSpack Base"]
+    IDmbSbm[label="I\nDebian\nMinimal\ntrixie\nSpack Minimal\nmaster"]
+    IDmbSbz[label="I\nDebian\nMinimal\ntrixie\nSpack Minimal\n0.29.5"]
+
+    IAn[label="I\nAlma 9\nBase"]
+    IAt[label="I\nAlma 10\nBase"]
+    IAmn[label="I\nAlma 9\nMinimal"]
+    IAmt[label="I\nAlma 10\nMinimal"]
+    IAmnS[label="I\nAlma 9\nMinimal\nSpack Base"]
+    IAmtS[label="I\nAlma 10\nMinimal\nSpack Base"]
+    IAmnSbm[label="I\nAlma 9\nMinimal\nSpack Minimal\nmaster"]
+    IAmtSbz[label="I\nAlma 10\nMinimal\nSpack minimal\n0.29.5"]
+
+    
+
+
+
+    // An Instance Made only from a root parent A
+    edge[label="M",color=forestgreen]
+
+    ADb->IDb
+    ADt->IDt
+    AAn->IAn
+    AAt->IAt
+
+    // Product of A's and I's.  First from A's
+
+    AS->IDmbS
+    AS->IDmtS
+
+    AAm->IAmn
+    AAm->IAmt
+
+    AS->IAmnS
+    AS->IAmtS
+
+    ADm->IDmb
+    ADm->IDmt
+
+    ASmm->IDmbSbm
+    ASmt->IDmbSbz
+    ASmm->IAmnSbm
+    ASmt->IAmtSbz
+
+    // Then from I's
+    edge[label="I",color=red]
+
+    IDb->IDmb
+    IDt->IDmt
+
+    IDmb->IDmbS
+    IDmt->IDmtS
+
+    IAn->IAmn
+    IAt->IAmt
+
+    IAmn->IAmnS
+    IAmt->IAmtS
+
+    // etc
+
+    IDmbS->IDmbSbm
+    IDmtS->IDmbSbz
+
+    IAmnS->IAmnSbm
+    IAmtS->IAmtSbz
+
+}
+
+
+

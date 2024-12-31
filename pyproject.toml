@@ -1,0 +1,23 @@
+[project]
+name = "winch"
+version = "0.1.0"
+description = "Add your description here"
+license = {text = "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)"}
+readme = {file = "README.org", content-type = "text/org"}
+authors = [
+    { name = "Brett Viren", email = "brett.viren@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.1.8",
+    "graphviz>=0.20.3",
+    "networkx>=3.4.2",
+    "pydot>=3.0.3",
+]
+
+[project.scripts]
+winch = "winch.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
