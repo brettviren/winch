@@ -1,4 +1,4 @@
-#+title: winch 󱁉🧵 Wide Image Node Container Harness
+#+title: winch🧵 Wide Image Node Container Harness
 
 *winch* helps build a set of container images that span a "wide" parameter space.
 

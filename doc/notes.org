@@ -1,4 +1,18 @@
-* Blah
+* [0/3] todo
+
+- [ ] get ~parent[instance]~ working
+
+  #+begin_example
+uv run winch -c wct.toml render -o 'wct/images/{kind}/Containerfile' debian_minimal_da796d15414e08813f6a6c6d81a7f1face282c9f
+  #+end_example
+
+- [ ] Tune wct.toml to produce clean ~inode~ and ~anode~
+
+- [ ] add back in ~podman~ code from initial test
+  
+
+
+* Blah blah
   These may have
   parameters that are of type list-of-string.  Such a parameter is interpreted
   as to span all possible variants of that parameter.  For example, a ~debian~
