@@ -1,9 +1,14 @@
 #!/usr/bin/env python
 import os
 import sys
+import json
+import shutil
 import logging
 import hashlib
 from itertools import product
+import subprocess
+import tempfile
+from pathlib import Path
 
 log = logging.getLogger("winch")
 debug = log.debug
@@ -11,24 +16,59 @@ info = log.info
 warn = log.warning
 error = log.error
 
-def setup_logging(log_output, log_level):
+
+class TempDir:
+    '''
+    A temporary directory context manager.
+
+    See tempfile.mkdtemp for suffix, prefix and dir.  
+
+    If abandon is True (default is False) then the directory is not removed on exit.
+
+    The directory path name is accessible from the "path" attribute.
+    '''
+    def __init__(self, suffix=None, prefix=None, dir=None, abandon=False):
+        self.path = None
+        self._args = (suffix, prefix, dir)
+        self._abandon = abandon
+
+    def __enter__(self):
+        self.path = Path(tempfile.mkdtemp(*self._args))
+        return self.path
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self._abandon:
+            return
+        if self.path:
+            import shutil
+            shutil.rmtree(self.path)
+
+
+def setup_logging(log_output, log_level, log_format=None):
+
     try:
         level = int(log_level)      # try for number
     except ValueError:
         level = log_level.upper()   # else assume label
     log.setLevel(level)
 
+    if log_format is None:
+        log_format = '%(levelname)s %(message)s (%(filename)s:%(funcName)s)'
+    log_formatter = logging.Formatter(log_format)
+
+    def setup_handler(h):
+        h.setLevel(level)
+        h.setFormatter(log_formatter)
+        log.addHandler(h)
+
+
     if not log_output:
         log_output = ["stderr"]
     for one in log_output:
         if one in ("stdout", "stderr"):
-            sh = logging.StreamHandler(getattr(sys, one))
-            sh.setLevel(level)
-            log.addHandler(sh)
+            setup_handler(logging.StreamHandler(getattr(sys, one)))
             continue
-        fh = logging.FileHandler(one)
-        fh.setLevel(level)
-        log.addHandler(fh)
+        setup_handler(logging.FileHandler(one))
 
     debug(f'logging to {log_output} at level {log_level}')
 
@@ -37,7 +77,7 @@ class SafeDict(dict):
         # print(f'MISSING: {key=}')
         return '{' + key + '}'
 
-def self_format(dat: dict, return_changed=False) -> dict:
+def self_format(dat: dict, return_changed=False, ignore_errors = False) -> dict:
     '''
     Format string values in dict dat using keys in same dict.
 
@@ -47,17 +87,21 @@ def self_format(dat: dict, return_changed=False) -> dict:
     made is returned.
     '''
 
+    # debug(json.dumps(dat))
+
     skip = set()
     nchanged = 0
+
+    errors = set()
+
     while True:
         changed = False
         for k,v in dat.items():
-
             # descend into sub-dicts but only once
             if isinstance(v, dict):
                 if k in skip:
                     continue
-                dat[k], nch = self_format(v, True)
+                dat[k], nch = self_format(v, True, ignore_errors)
                 skip.add(k)
                 if nch:
                     changed = True
@@ -71,14 +115,19 @@ def self_format(dat: dict, return_changed=False) -> dict:
             # Actually try to format
             try:
                 newv = v.format_map(SafeDict(**dat))
-            except TypeError:
-                # error(f'error in formatting: {k=} -> {v=}')
+            except TypeError as err:
+                # warn(f'self_format type error with key "{k}":\n{err}')
                 # raise
 
                 ## This comes from, eg '{parent[release]}' when 'parent' is not
                 ## defined eg in A-nodes.  It may be added later, eg for
                 ## I-nodes.  Following "ignore what you don't know" philosophy
                 ## we, err, ignore....
+                continue
+            except KeyError as err:
+                errors.add(f'format error with key "{k}" and string "{v}", missing: {err}.  Check your config.')
+                # This may come from referencing a missing dict key (not ours
+                # directly, but one of our attributes which is of type dict).
                 continue
             if newv == v:
                 continue
@@ -87,6 +136,11 @@ def self_format(dat: dict, return_changed=False) -> dict:
             dat[k] = newv
         if not changed:
             break
+    if errors and not ignore_errors:
+        for err in errors:
+            warn(err)
+        debug('resulting formatted dict:')
+        debug('\n'.join([f'{k}:{v}' for k,v in dat.items()]))
     if return_changed:
         return dat, nchanged
     return dat
@@ -149,4 +203,52 @@ def outer_product(dat, **common):
         pars = dict(common, **ldat)
         ret.append(pars)
     return ret
+
+
+def which(exe):
+    '''
+    Return a function that will run the given executable program.
+
+    >>> podman = which("podman")
+    >>> podman("images")
+    >>> podman(["image","exists",image])
+
+    The function takes a single positional argument of string or list of string.
+    A string will invoke the executable in a shell.  Any keyword args are passed
+    to subprocess.run().  The option "check=True" is set by default.
+    '''
+    path = shutil.which(exe)
+    if path is None:
+        raise FileNotFoundError(f'no such executable "{exe}"')
+    def runner(args=None, **opts):
+        opts.setdefault("check",True)
+        if isinstance(args, str):
+            opts['shell'] = True
+            cmd = f'{path} {args}'
+        else:
+            cmd = [path]
+            if args is not None:
+                cmd += list(args)
+        return subprocess.run(cmd, **opts)
+    return runner
+
+
+def assure_file(path, content=None):
+    '''
+    Assure file exists at path with content (if given).
+
+    Existing file with matching content is not changed.
+    '''
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if content is not None and path.exists():
+        oldtext = path.read_text()
+        if oldtext == content:
+            return
+
+    # fresh path and/or content
+    path.write_text(content)
+    
 

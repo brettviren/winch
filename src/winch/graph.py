@@ -1,35 +1,36 @@
 #!/usr/bin/env python
 '''
-Functions for winch container image layer graph.
+The winch container image layer graph.
 
 ## Overview
 
-The graph is directed with three types of nodes and four types of edges.  The
-node types are:
+The winch graph has three node types (K, A and I) and four edge types (K, A, I
+and M).  Conceptually, removal of all "M" edges allows factoring the graph into
+three disconnected graphs each consisting of only K, only A or only I nodes and
+edges.  The K-graph is a directed graph with both splits and joins allowed.  The
+A-graph and I-graph are trees with splits allowed but no joins.  
 
-- K node represents a "kind" of container image layer.  K node parameters may be
-  ambiguous over a list of variant values.
+The K, A and I nodes represent a progression from more to less ambiguity of
+parameters.
 
-- A node represents an abstract version of a K node with ambiguity removed by
-  selecting exactly one from each variant.
+- K-node represents a "kind" of container image layer and is most ambiguous
+  (spans variants) along two "dimensions".  First, a K-node may have zero or
+  more a parent K-nodes.  Each K-parent represents all possible image layers
+  that may be used as the FROM for all layers that the K-node can generate.
+  Second, a K-node may have zero or more parameters that are list-of-string.
+  The K-node represents all possible parameter sets formed as the outer product
+  of these parameters.
 
-- I node represents a concrete version of A where all string parameters are
-  interpolated.
+- A-node represents a more concrete but still abstract version of a K-node where
+  one from the set of possible K-parents has been selected.  Each A-node "made"
+  by a K-node is represented by an M-edge.  Each A-node is also the head of an
+  A-edge linking it to an A-parent which was made by the selected K-parent.  Any
+  list-of-string parameters of the K-node are left ambiguous.
 
-The graph has the following edges:
-
-- K edge joins K-K nodes as governed by a K node `parent_kind` parameter.  A "K
-  subgraph" is embedded and may be formed by selecting K nodes and K edges.
-  This subgraph may have both joins and splits.
-
-- I edge joins I-I nodes as governed by the generation algorithm.  An tail of
-  the I edge records the layer on which the head of an I node is built.  An "I
-  subgraph" is embedded and may be formed by selecting I nodes and I edges.
-
-- A edge joins K-A nodes and represents the removal of list parameter ambiguity.
-
-- M edge joins A-I nodes and represents the "making" of an I node from an A
-  node.
+- I-node represents a concrete version of an A-node where any list-of-string
+  parameters have been resolved.  All string parameters are interpolated.  The
+  I-node "made" from an A-node is connected by an M-edge and the I-parent made
+  from the A-parent is connected by an I-edge.
 
 '''
 
@@ -38,79 +39,59 @@ import networkx as nx
 
 class Graph:
 
-    def __init__(self, knodes = None):
-        self.graph = nx.DiGraph()
+    def __init__(self, **knodes):
         if knodes is None:
             return
-        self.update(knodes)
+        self.initialize(**knodes)
 
-    def add_node(self, ntype, name, **data):
-        '''
-        Add a node to the graph, return its ID
-
-        This asserts the policy:
-
-        - No adding of nodes of the same identity.
-
-        - ntype is a node type code: K, A or I.
-
-        - name provides fodder for a node identity and is generally assumed to
-          be a K-node name regardless of ntype.
-
-        - The node identity is set as:
-
-          - K-node uses "name" unchanged.
-
-          - A-node uses "A_<name>_<hash>" or data[anode]
-
-          - I-node uses "<name>_<hash>" or data[inode]
-
-        When node name comes from data for A and I types, the string is
-        formatted against a '{digest}' giving a hash of data.  If a node name is
-        provided in this way, be cautious that it is unique.
-
-        The data will be augmented to the following:
-
-        - nodetype :: the ntype letter.
-        '''
-        ntype = ntype[0].upper()
-        if ntype not in "KAI":
-            raise ValueError(f'unsupported node type: {ntype}')
-        data['nodetype'] = ntype
-
+    def nodes(self, ntype='I'):
+        if ntype == 'I':
+            return self.I.nodes.data()
         if ntype == 'K':
-            ident = name
-        else:
-            dig = digest([ntype, name, data])
-            if ntype == 'A':
-                ident = f'A_{name}_{dig}'
-            else:               # I
-                ident = data.get('inode', f'{name}_{dig}').format(digest=dig)
+            return self.K.nodes.data()
+        raise ValueError(f'unknown ntype: "{ntype}"')
+        
 
-        if ident in self.graph:
-            raise ValueError(f'node {ident} already in graph')
+    def _generate_adata(self, kpath):
+        kind = kpath[-1]
+        adata = dict(self.K.nodes[kind])
+        adata['kpath'] = tuple(kpath)
+        adata['kind'] = kind
+        if len(kpath) > 1:
+            adata['parent_kind'] = kpath[-2]
+        return outer_product(adata)
 
-        self.graph.add_node(ident, **data)
-        return ident
+    def _generate_idata(self, adats, iparentdats=None):
 
+        if not iparentdats:
+            iparentdats = [None]
+        ret = list()
+        for adat, iparentdat in product(adats, iparentdats):
+            if iparentdat:
+                adat = dict(adat, parent=iparentdat)
+            else:
+                adat = dict(adat)
+            idat = self_format(adat)
 
-    def add_edge(self, etype, tail, head, **data):
+            # An I-node can be seen multiple times when it comes from a root
+            # K-node seen in different paths.
+            inode = digest(idat)
+            if inode not in self.I:
+                self.I.add_node(inode, **idat)
+
+            if iparentdat:
+                ipnode = digest(iparentdat)
+                self.I.add_edge(ipnode, inode)
+            ret.append(idat)
+        return ret
+
+    def initialize(self, **knodes):
         '''
-        Add edge from tail to head of given etype (K,A,M,I)
-
-        The etype is added to data as label
+        Initialize the graph with mapping from kind name to kind parameters.
         '''
-        etype = etype[0].upper()
-        self.graph.add_edge(tail, head, label=etype, **data)
-
-
-    def _updateK(self, knodes):
-        '''
-        Update the "K" subgraph with mapping from kind node ID to its parameters.
-        '''
+        self.K = nx.DiGraph()
         for knode, kdata in knodes.items():
-            self.add_node('K', knode, kind=knode, **kdata) # name is ID for K nodes
-            self._updateA(knode)
+            self.K.add_node(knode, **kdata)
 
         for knode, kdata in knodes.items():
             pks = kdata.get('parent_kind', None)
@@ -119,121 +100,22 @@ class Graph:
             if isinstance(pks, str):
                 pks = [pks]
             for pk in pks:
-                self.add_edge('K', pk, knode)
+                self.K.add_edge(pk, knode)
 
-    def _updateA(self, knode):
-        '''
-        Generate A nodes from existing a K-node and add them to graph.
-        '''
-        kdata = self.graph.nodes[knode]
-        for adat in outer_product(kdata):
-            adat = self_format(adat)
-            aname = self.add_node('A', knode, **adat)
-            self.add_edge('A', knode, aname)
+        kpaths = list()
+        kleaves = [n for n in self.K.nodes() if self.K.out_degree(n) == 0]
+        for knode in [n for n in self.K.nodes() if self.K.in_degree(n) == 0]:
+            kpaths += nx.all_simple_paths(self.K, knode, kleaves)
 
-
-    def get_anodes(self, knode):
-        '''
-        Return A-nodes of K-node.
-        '''
-        return self.get_successors(knode, 'A')
-
-
-    def get_inodes(self, knode):
-        '''
-        Return the I-nodes generated from A-nodes generated from K-node.
-        '''
-        inodes = list()
-        for anode in self.get_anodes(knode):
-            inodes += self.get_successors(anode, 'I')
-        inodes = list(set(inodes))
-        inodes.sort()
-        return inodes
-
-
-    def _updateI(self, knode):
-        '''
-        Generate the I nodes from the K-node's A nodes and any I-nodes from
-        the K-node's K-parent.
-        '''
-        # get all I-nodes of K-parent to given K-node
-        inodes = list()
-        for kparent in self.get_predecessors(knode, 'K'):
-            inodes += self.get_inodes(kparent)
-        if not inodes:
-            inodes = [None]     # placeholder for product()
-
-        # get all A-nodes of this K node
-        anodes = self.get_anodes(knode)
-
-        for anode, inode in product(anodes, inodes):
-            adat = self.graph.nodes[anode]
-            if inode is not None:
-                adat['parent'] = self.graph.nodes[idat]
-            idat = self_format(adat)
-            iname = self.add_node('I', knode, **idat)
-            self.add_edge('M',anode, iname)
-            if inode is not None:
-                self.add_edge('I', inode, iname)
-
-    def update(self, knodes):
-        '''
-        Update the graph with mapping from kind name to kind parameters.
-        '''
-        self._updateK(knodes)
-        for knode in knodes:
-            self._updateI(knode)
-        
-    def get_roots(self):
-        '''
-        Return nodes which have no predecessors
-        '''
-        roots = list()
-        for node in self.graph.nodes:
-            if not self.get_predecessors(node):
-                roots.append(node)
-        return node
-
-    def get_successors(self, node: str, label: str|None = None):
-        '''
-        Return the successor (child) nodes.
-
-        If label is given, limit to those reached along an edge with that label.
-        '''
-        nodes = self.graph.successors(node)
-        if label is None:
-            return nodes
-        return [n for n in nodes if self.graph.edges[node,n]["label"] == label]
-        
-    def get_predecessors(self, node: str, label: str|None = None):
-        '''
-        Return the predecessor (parent) nodes.
-
-        If label is given, limit to those reached along an edge with that label.
-        '''
-        nodes = self.graph.predecessors(node)
-        if label is None:
-            return nodes
-        return [n for n in nodes if self.graph.edges[n,node]["label"] == label]
-
-    def get_ichain(self, inode):
-        '''
-        Return list of I-nodes by walking I-parents along I-edge starting at inode.
-
-        List ordered parents-first, ends in inode.
-        '''
-
-        ret = [inode]
-        while True:
-            parents = self.get_predecessors(inode, 'I')
-            nparents = len(parents)
-            if nparents == 0:
-                break
-            if nparents > 1:
-                raise RuntimeError(f'corrupt graph, I-node "{inode}" has {nparents} parent I-nodes')
-            inode = parents[0]
-            ret.append(inode)
-        ret.reverse()
-        return ret
+        self.I = nx.DiGraph()
+        for kpath in kpaths:
+            idats_on_path = list()
+            for knum, knode in enumerate(kpath):
+                parent_idats = None
+                if knum:
+                    parent_idats = idats_on_path[knum-1]
+                adats = self._generate_adata(kpath[:knum+1])
+                idats = self._generate_idata(adats, parent_idats)
+                idats_on_path.append(idats)
 
         
