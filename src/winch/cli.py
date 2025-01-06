@@ -6,14 +6,18 @@ Command line interface to winch.
 
 import click
 
-from .util import setup_logging, debug, warn, error, self_format
+from .util import setup_logging, debug, warn, error, self_format, assure_file, SafeDict
 from .config import load as load_config
 from .viz import write_dot
 from .graph import Graph
+from .podman import build_image, image_exists
 from pathlib import Path
+import functools
 
 class Main:
-    def __init__(self, config):
+    def __init__(self, config=None):
+        if config is None:
+            return
         self.opts = config.pop("winch",{})
         self.graph = Graph(**config)
 
@@ -33,67 +37,223 @@ def cli(ctx, config, log_output, log_level):
     winch - Wire-Cell Toolkit image node container harness
     '''
     setup_logging(log_output, log_level)
-    ctx.obj = Main(load_config(config))
+    try:
+        cfg = load_config(config)
+    except FileNotFoundError:
+        cfg = None
+    ctx.obj = Main(cfg)
     return
 
 
-@cli.command("list-nodes")
-@click.option("-t","--nodetype", default='I',
-              help='Type of nodes to list (I)instance (default) or (K)ind')
+@cli.command("kpaths")
 @click.pass_context
-def list_nodes(ctx, nodetype):
-    for node, ndat in ctx.obj.graph.nodes(nodetype):
-        image = ndat.get("image","")
-        label = ndat.get("label","")
-        print(f'{nodetype} {node} {image} "{label}"')
-        
+def cmd_kpaths(ctx):
+    for one in ctx.obj.graph.kpaths():
+        print(','.join(one))
+            
+
+
+def select_inodes(ctx, kpath=None, kind=None, deps=None, images=None):
+
+    if kpath:
+        kpath = tuple(kpath.split(","))
+        ret = list()
+        for knode, inodes in zip(kpath, ctx.obj.graph.from_kpath(kpath)):
+            ret += inodes
+        return inodes
+
+    if deps:
+        nodes = [deps]
+        if '=' in deps:
+            key, value = deps.split('=', 1)
+            nodes = [n for n,d in ctx.obj.graph.I.nodes.data() if d.get(key, None) == value]
+
+        ret = list()
+        for inode in nodes:
+            for got in ctx.obj.graph.ipath(inode):
+                ret.append(got)
+        return ret
+
+    if kind:
+        return ctx.obj.graph.from_kind(kind)
+
+    if images:
+        if images == "all":
+            return ctx.obj.graph.I.nodes
+
+        ret = list()
+        for image in images.split(","):
+            if '=' in image:
+                key, value = image.split("=", 1)
+                ret += [n for n,d in ctx.obj.graph.I.nodes.data() if d.get(key, None) == value]
+            else:
+                ret.append(image)
+        return ret
+    return []
+
+
+def selection(func):
+    '''
+    A decorator for a command applied to a selection of I-nodes.
+
+    It provides a single 'inodes' attribute
+    '''
+    @click.option("-k","--kind", default=None, type=str,
+                  help='Limit to I-nodes made from K-node regardless of path')
+    @click.option("-d","--deps", default=None, type=str,
+                  help='Limit to I-nodes on which the given inode depends.')
+    @click.option("-i","--images", default=None, type=str,
+                  help='Limit to specific I-nodes.')
+    @click.pass_context
+    @functools.wraps(func)
+    def wrapper(ctx, *args, **kwds):
+        kpath = kwds.pop('kpath',None)
+        kind = kwds.pop('kind',None)
+        deps = kwds.pop('deps',None)
+        images = kwds.pop('images',None)
+        inodes = select_inodes(ctx, kpath, kind, deps, images)
+        if not inodes:
+            warn(f'no instances found')
+        kwds['inodes'] = inodes
+        return func(*args, **kwds)
+    return wrapper
+
+
+
+@cli.command("list")
+@selection
+@click.option("-t","--template", default="{ntype} {node} {image}",
+              help="The template for display")
+@click.pass_context
+def cmd_list(ctx, inodes, template):
+    '''
+    List things about the winch graph.
+
+    Default will list all K-nodes.
+
+    Providing -K/--kpath lists I-nodes from the K-graph path.  A special K-graph
+    path of "all" will list all K-graph paths and no I-nodes.
+
+    Providing -k/--kind lists I-nodes produced from the K-node regardless of
+    K-graph path.
+
+    Providing -d/--deps gives an I-node as its node name (hash) or an
+    "key=value" attribute.
+
+    Providing -i/--images gives a comma-separated list of I-node, each specified
+    by a node name (hash) or an "key=value" attribute.  A special entry "all"
+    will match all I-nodes.
+    '''
+    template = template.replace('\\n','\n').replace('\\t','\t')
+    for inode in inodes:
+        data = ctx.obj.graph.data(inode)
+        string = template.format_map(SafeDict(ntype='I', node=inode, **data))
+        print(string)
+
+
+
+@cli.command("build")
+@selection
+@click.option("--containerfile-attribute", default="containerfile",
+              help="Name the attribute providing the Containerfile content")
+@click.option("--image-attribute", default="image",
+              help="Name the attribute providing the image name")
+@click.option("-r","--rebuild", default="none",
+              type=click.Choice(["none","all","deps","last"]),
+              help="Control what to let podman attempt to rebuild if image exists")              
+@click.option("-o","--outpath", default='winch-contexts/{image}/Containerfile',
+              help='A file path name for output files, may include "{format}" markup')
+@click.pass_context
+def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, outpath):
+    '''
+    Build container images from I-nodes.
+
+    This will also build Containerfile file and context directory in output.
+    '''
+    for inode in inodes:
+        idata = ctx.obj.graph.data(inode)
+        image = idata[image_attribute]
+
+        if (image_exists(image) and
+            (rebuild == "none" 
+             or (rebuild == "deps" and inode == inodes[-1])
+             or (rebuild == "last" and inode != inodes[-1]))):
+            print(f'not rebuilding existing image: {image}')
+            continue
+        try:
+            cfile = idata[containerfile_attribute]
+        except KeyError:
+            debug(f'{inode} "{image}" lacks {containerfile_attribute}, skipping')
+            continue
+        cpath = outpath.format(node=inode, **idata)
+        assure_file(cpath, cfile)
+
+        for fpath, fcont in idata.pop('files', {}).items():
+            debug(f'{fpath=}\n{fcont}\n')
+            fpath = Path(cpath).parent / fpath.format(node=inode, **idata)
+            fcont = fcont.format_map(SafeDict(node=inode, **idata))
+            assure_file(fpath, fcont)
+
+        build_image(image, cpath)
+
 
 @cli.command("render")
+@selection
+@click.option("-T", "--template-attribute", default=None,
+              help="Name the attribute providing the content to render")
+@click.option("-t", "--template", default=None,
+              help="The template text to render")
 @click.option("-o","--outpath", default=None,
-              help='A fully path name for output files, may include "{format}" markup')
-@click.option("-t","--template", default='template',
-              help='The parameter name to use for the content')
-@click.option("-s","--string", default=None,
-              help='A string to render, overrides template')
-@click.option("-k","--kpath", multiple=True, default=[],
-              help='Limit rendering to given K-path, default is all')
+              help='A file path name for output files, may include "{format}" markup')
 @click.pass_context
-def render(ctx, outpath, template, string, kpath):
+def render(ctx, inodes, template, template_attribute, outpath):
     '''
-    Render the graph.
-    '''
-    if kpath:
-        raise click.BadParameter('kpath limits not yet implemented')
-    to_render = ctx.obj.graph.I.nodes
+    Render a template to a file.
 
-    for inode in to_render:
-        idat = ctx.obj.graph.I.nodes[inode]
-        if string:
-            text = string
-        else:
+    Either -T/--template-attribute or -t/--template are requird
+
+    If not -o/--outpath is given, output is to stdout.
+    '''
+    if not any((template, template_attribute)):
+        raise click.BadParameter('must provide template or template attribute')
+
+    if outpath is None:
+        outpath = '/dev/stdout'
+
+    for inode in inodes:
+        idata = ctx.obj.graph.data(inode)
+        opath = outpath.format_map(SafeDict(node=inode, **idata))
+        if template_attribute is not None:
             try:
-                text = idat[template]
+                tmpl = idata[template_attribute]
             except KeyError:
-                debug(f'no template in I-node {inode}: {idat}')
+                warn(f'no template attribute {template_attribute} in node {inode}, skipping')
                 continue
-        text = text.format(**idat)
-        if not outpath:
-            print(text)
-            continue
-        path = Path(outpath.format(**idat))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-        debug(path)
+        else:
+            tmpl = template
+        tmpl = tmpl.replace('\\n','\n').replace('\\t','\t')
+        otext = tmpl.format_map(SafeDict(node=inode, **idata))
+        assure_file(opath, otext)
+
+
 
 @cli.command("dot")
 @click.option("-o","--output", default="/dev/stdout",
               help='Output for dot content')
+@click.option("-t","--template", default="{image}\n{node}",
+              help="The template node label")
 @click.pass_context
-def dot(ctx, output):
+def dot(ctx, output, template):
     '''
     Emit GraphViz dot representing the configured graph.
     '''
-    write_dot(ctx.obj.graph.I, output)
+    I = ctx.obj.graph.I
+    for node, data in I.nodes.data():
+        label = template.format(ntype='I', node=node, **data)
+        I.nodes[node].clear()
+        I.nodes[node]["label"] = label
+
+    write_dot(I, output)
 
 
 

@@ -51,6 +51,9 @@ class Graph:
             return self.K.nodes.data()
         raise ValueError(f'unknown ntype: "{ntype}"')
         
+    def data(self, node, ntype='I'):
+        g = getattr(self, ntype)
+        return g.nodes[node]
 
     def _generate_adata(self, kpath):
         kind = kpath[-1]
@@ -69,8 +72,10 @@ class Graph:
         for adat, iparentdat in product(adats, iparentdats):
             if iparentdat:
                 adat = dict(adat, parent=iparentdat)
+                # print(f'{iparentdat=}')
             else:
                 adat = dict(adat)
+            # print(f'{adat.keys()}')
             idat = self_format(adat)
 
             # An I-node can be seen multiple times when it comes from a root
@@ -84,6 +89,18 @@ class Graph:
                 self.I.add_edge(ipnode, inode)
             ret.append(idat)
         return ret
+
+
+    def kpaths(self):
+        '''
+        Return list-of-tuple of all K-graph paths.
+        '''
+        kpaths = list()
+        kleaves = [n for n in self.K.nodes() if self.K.out_degree(n) == 0]
+        for knode in [n for n in self.K.nodes() if self.K.in_degree(n) == 0]:
+            kpaths += tuple(nx.all_simple_paths(self.K, knode, kleaves))
+        return kpaths
+
 
     def initialize(self, **knodes):
         '''
@@ -102,13 +119,8 @@ class Graph:
             for pk in pks:
                 self.K.add_edge(pk, knode)
 
-        kpaths = list()
-        kleaves = [n for n in self.K.nodes() if self.K.out_degree(n) == 0]
-        for knode in [n for n in self.K.nodes() if self.K.in_degree(n) == 0]:
-            kpaths += nx.all_simple_paths(self.K, knode, kleaves)
-
         self.I = nx.DiGraph()
-        for kpath in kpaths:
+        for kpath in self.kpaths():
             idats_on_path = list()
             for knum, knode in enumerate(kpath):
                 parent_idats = None
@@ -119,3 +131,48 @@ class Graph:
                 idats_on_path.append(idats)
 
         
+    def from_kpath(self, kpath):
+        '''
+        Return list of lists of I-nodes generated along K-graph path.
+
+        A path may be represented as a string as a comma-separated list of K-nodes.
+        '''
+        # normalize
+        if isinstance(kpath, str):
+            kpath = kpath.split(",")
+        kpath = tuple(kpath)
+        kpath_str = ','.join(kpath)
+
+        ret = [list() for p in kpath]
+        ndeep = len(kpath)
+        for inode, idata in self.I.nodes.data():
+            maybe = idata['kpath']
+            if len(maybe) > ndeep:
+                continue
+            maybe_str = ','.join(maybe)
+            if len(maybe_str) > len(kpath_str):
+                continue
+            if kpath_str[:len(maybe_str)] == maybe_str:
+                ret[len(maybe)-1].append(inode)
+        return ret
+            
+    def from_kind(self, kind):
+        '''
+        Return all I-nodes of a kind regardless of K-graph path.
+        '''
+        return [n for n,d in self.I.nodes.data() if d['kind'] == kind]
+
+    def ipath(self, ileaf):
+        '''
+        Return ordered dependency list of the I-nodes on which ileaf
+        depends, ending with ileaf.
+        '''
+        ret = [ileaf]
+        while self.I.in_degree(ret[-1]):
+            suc = list(self.I.predecessors(ret[-1]))
+            if len(suc) > 1:
+                raise ValueError(f'Malformed I-graph: {ret[-1]} has multiple parents {suc}')
+            ret.append(suc[0])
+        ret.reverse()
+        return ret
+

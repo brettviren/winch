@@ -241,9 +241,10 @@ def assure_file(path, content=None):
     '''
 
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-    if content is not None and path.exists():
+    if content is not None and path.exists() and path.is_file():
         oldtext = path.read_text()
         if oldtext == content:
             return

@@ -1,0 +1,30 @@
+[debian]
+release = ['bookworm','trixie']
+image = '{kind}:{release}'
+init = 'apt-get update && apt-get upgrade'
+inst = 'apt-get install -y'
+
+[alma]
+release = ['8','9']
+image = 'almalinux:{release}'
+inst = 'dnf install -y'
+init = 'dnf check-update -y || dnf update -y'
+
+[edit]
+parent_kind = ["debian","alma"]
+image = '{parent_kind}-{parent[release]}-{kind}'
+containerfile = """
+FROM {parent[image]}
+RUN {parent[init]}
+RUN {parent[inst]} emacs
+"""
+
+[devel]
+parent_kind = ["debian","alma"]
+image = '{parent[image]}-{kind}'
+containerfile = """
+FROM {parent[image]}
+RUN {parent[init]}
+RUN {parent[inst]} gcc
+"""
+

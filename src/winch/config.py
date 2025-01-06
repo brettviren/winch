@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import tomllib
+import os
 
 def basedir(name = None, assure = True):
     '''

@@ -1,0 +1,146 @@
+# This describes "kinds" of images.  Each is a flat bag of parameters of
+# templated string values or lists of strings.  Lists imply an outer product is
+# performed to make instances.  Strings are formatted with values of other
+# parameters.  A kind may have zero or more parent kinds.  One instance is made
+# for each instance of the parent kind. 
+
+[debian]
+# Params are used for formatting other variables and templates.  A params of
+# type list form a cross product.  
+release = ['bookworm','trixie']
+image = '{kind}:{release}'
+label = '{kind} {release}'
+
+[alma]
+release = ["9"]
+image = 'almalinux:{release}'
+label = '{kind} {release}'
+
+[alma_minimal]
+# Each image class has zero or more parents kinds.
+parent_kind = "alma"
+image = '{parent_kind}-{parent[release]}-minimal'
+label = '{parent[label]} minimal'
+# but will be given a single "parent" which is the data structure from the
+# single instance upon which a generated instance is built.
+containerfile = """
+FROM {parent[image]}
+"""
+
+[debian_minimal]
+parent_kind = "debian"
+image = '{parent_kind}-{parent[release]}-minimal'
+label = '{parent[label]} minimal'
+# The template will be formated with params of this node and the parent.
+containerfile = """
+FROM {parent[image]}
+RUN apt update \
+    && \
+    apt-get install -y \
+      build-essential ca-certificates coreutils curl gfortran git gpg clang autoconf \
+      lsb-release unzip zip direnv man-db \
+      python-is-python3 python3 python3-distutils python3-venv python3-click python3-yaml \
+    && \
+    apt clean
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+RUN bash -c "echo eval '$(direnv hook bash)' >> $HOME/.bashrc"
+ENTRYPOINT ["bash","--login"]
+"""
+# fixme:
+# - [x] install man
+# - [x] add direnv setup to .bashrc
+# - [x] switch from apt to apt-get to avoid innocuous warning about stable CLI
+# - [x] install clang package
+# - [x] install autoconf package
+
+# This kind represents one "ecosystem".  Future may inculude UPS or FNALSPACK
+[spack]
+parent_kind = ["debian_minimal", "alma_minimal"]
+image = '{parent[image]}-spack'
+label = '{parent[label]} spack'
+containerfile = """
+FROM {parent[image]}
+RUN git clone -c feature.manyFiles=true --depth=2 https://github.com/spack/spack.git
+RUN /spack/bin/spack compiler find
+RUN git clone https://github.com/WireCell/wire-cell-spack.git /spack/var/spack/repos/wirecell
+RUN /spack/bin/spack repo add /spack/var/spack/repos/wirecell
+RUN bash -c 'echo . /spack/share/spack/setup-env.sh >> $HOME/.bashrc'
+ENTRYPOINT ["bash","--login"]
+"""
+
+# This kind of node represents building a seed package to provide dependencies
+# for later.
+[spackage]
+parent_kind = "spack"
+image = '{parent[image]}-wct-{version}'
+label = '{parent[label]} WCT {version}'
+package = "wire-cell-toolkit"
+version = ["master", "0.28.0"]
+spec = "{package}@{version}"
+containerfile = """
+FROM {parent[image]}
+RUN /spack/bin/spack install --fail-fast --no-cache --show-log-on-error -j 10 {spec} || true
+ENTRYPOINT ["bash","--login"]
+"""
+
+# This kind of node represents building a developer view and doing the tests
+[spackdev]
+parent_kind = "spackage"
+image = '{parent[image]}-dev-{gitref}'
+label = '{parent[label]} DEV {gitref}'
+package = "wire-cell-toolkit"
+#gitref = ["master","apply-pointcloud"]
+gitref = "apply-pointcloud"
+containerfile = """
+FROM {parent[image]}
+RUN /spack/bin/spack view -e wire-cell-toolkit add -i winch/local wire-cell-toolkit
+RUN git clone --branch {gitref} --single-branch https://github.com/WireCell/wire-cell-toolkit.git winch/toolkit
+RUN git clone https://github.com/WireCell/wire-cell-python.git winch/python
+COPY dot.envrc winch/.envrc
+"""
+# fixme:
+# - [x] remove direnv hook from here when it's put in debian-minimal
+files = { "dot.envrc" = """
+load_prefix "$PWD/local"
+layout python
+export PREFIX="$PWD/local"
+path_add PKG_CONFIG_PATH "$PREFIX/share/pkgconfig"
+path_add PKG_CONFIG_PATH "$PREFIX/lib/pkgconfig"
+path_add PKG_CONFIG_PATH "$PREFIX/lib64/pkgconfig"
+
+
+### Added by wcwc task wct-dev-view 
+# cfg from source and data from view
+path_add WIRECELL_PATH $PWD/toolkit/cfg
+path_add WIRECELL_PATH $PWD/local/share/wirecell
+
+# find wct-bats.sh library in source 
+export BATS_LIB_PATH=$PWD/toolkit/test
+
+# # Find built bin, avoids needing to run "./wcb install".
+# PATH_add $PWD/toolkit/test/bats/bin
+# PATH_add $PWD/toolkit/build/apps
+# # Find built libs to avoid install.  Note, edit this list to taste.
+# path_add LD_LIBRARY_PATH $PWD/toolkit/build/{apps,aux,clus,gen,iface,hio,img,pgraph,root,sig,sigproc,sio,tbb,util}
+
+# Find python modules
+export PYTHONPATH=$PWD/python
+"""}
+# fixme:
+# - [x] remove PATH_add's in favor of ./wcb install into local
+
+
+[wctdev]
+parent_kind = "spackdev"
+image = '{parent[image]}-wctdev'
+label = '{parent[label]} WCT dev'
+containerfile = """
+FROM {parent[image]}
+RUN cd /winch/python/ && direnv allow && python -m pip install .
+RUN cd /winch/toolkit/ && direnv allow && ./wcb configure --prefix=$PREFIX --boost-mt --boost-libs=$PREFIX/lib --boost-include=$PREFIX/include --with-jsonnet-libs=gojsonnet --with-root=$PREFIX
+RUN cd /winch/toolkit/ && direnv allow && ./wcb 
+RUN cd /winch/toolkit/ && direnv allow && ./wcb install
+RUN cd /winch/toolkit/ && direnv allow && ./wcb --tests
+"""
+# fixme:
+# - [ ] variants for GCC and Clang.
