@@ -12,6 +12,10 @@ configuration file.
 
 This section describes how to install *winch* and run it using a provided example configuration.
 
+** Requirements
+
+*winch* requires ~podman~, Python 3 with the Click and Neworkx packages for most basic use.
+
 ** Installation
 
 *winch* is a Python package and should obey recent Python packaging norms (make a
@@ -57,9 +61,18 @@ $ dot -Tsvg -o contrived.svg contrived.dot
 Build one or all images:
 
 #+begin_example
-$ winch -c winch.toml build -i debian-bookworm-edit
+$ winch -c winch.toml build -i image=debian-bookworm-edit
 $ winch -c winch.toml build -i all
 #+end_example
+
+Here, we select an instance with ~-i image=debian-bookworm-edit~ that provides a
+selector.  One may instead give a hash shown from ~list~ as ~-i <hash>~.
+
+The ~-d/--deps~ is an important alternative to ~-i/--image~ when there are many
+possible image layers.  It and other options are describe in the section [[Usage
+Tips]].
+
+
 
 * Configure *winch*
 
@@ -75,9 +88,14 @@ specially:
 - ~image~ :: the name of the image layer such as used in a ~FROM~ line of a ~Containerfile~.
 - ~containerfile~ :: the content of a ~Containerfile~.
 - ~parent_kind~ :: optional, one or a *list* of other TOML tables to provide a possible parent image layer.
+- ~files~ :: a (sub) table (aka ~dict~) which maps file paths relative to the directory holding ~Containerfile~ to their file content.
 
-Note, the user may tell *winch* to use different parameters that serve the role of
-~image~ and ~containerfile~ via command line arguments.
+Notes
+
+- The user may tell *winch* to use different parameters that serve the role of
+  ~image~ and ~containerfile~ via command line arguments.
+
+- The ~Containerfile~ template may include a ~COPY~ to add files listed in ~files~ to the image.
 
 If a ~parent_kind~ attribute exists then the string values in a table's parameters
 may refer to these parameters which *winch* provides implicitly:
@@ -186,7 +204,106 @@ traversal algorithm:
 7. Continue to the next path.
 
 
-* winch for Wire-Cell
+* Usage Tips
+
+** Maybe rebuilding
+
+By default, *winch* will not ask ~podman~ to rebuild an image that already exists
+even if the ~Containerfile~ file may have changed.  This avoids the time needed
+for ~podman~ to examine the existing image.  Using a ~-d/--deps~ selection example,
+*winch* will notify the user when this occurs with lines like:
+
+#+begin_example
+$ uv run winch -c example/contrived.toml build -d image=debian-bookworm-edit
+not rebuilding existing image: debian:bookworm
+not rebuilding existing image: debian-bookworm-edit
+#+end_example
+
+You can let ~podman~ consider rebuilding with ~-r/--rebuild~ value of ~none~, ~all~,
+~deps~ or ~last~.
+
+#+begin_example
+$ uv run winch -c example/contrived.toml build -d image=debian-bookworm-edit -r last
+not rebuilding existing image: debian:bookworm
+STEP 1/3: FROM debian:bookworm
+STEP 2/3: RUN apt-get update && apt-get upgrade
+...
+COMMIT debian-bookworm-edit
+--> a6351fa2dad
+Successfully tagged localhost/debian-bookworm-edit:latest
+a6351fa2dade519407e2b6b394245d59b42abb703c56d633f29c5b35fcb5bb45
+#+end_example
+
+Repeating shows ~podman~ taking time to decide not to actually rebuild:
+
+#+begin_example
+$ uv run winch -c example/contrived.toml build -d image=debian-bookworm-edit -r last
+not rebuilding existing image: debian:bookworm
+STEP 1/3: FROM debian:bookworm
+STEP 2/3: RUN apt-get update && apt-get upgrade
+--> Using cache 3b57ff160cf4aec691ea432a6ad3a58a93d5c014072c54cfc1e19f187ca8f4bf
+--> 3b57ff160cf
+STEP 3/3: RUN apt-get install -y emacs
+--> Using cache a6351fa2dade519407e2b6b394245d59b42abb703c56d633f29c5b35fcb5bb45
+COMMIT debian-bookworm-edit
+--> a6351fa2dad
+Successfully tagged localhost/debian-bookworm-edit:latest
+a6351fa2dade519407e2b6b394245d59b42abb703c56d633f29c5b35fcb5bb45
+#+end_example
+
+** Force rebuilding
+
+When state resides outside the ~Containerfile~ then ~podman~ can not detect the need to change.  This is commonly experienced when a layer builds the ~HEAD~ of some changing ~git~ branch.  To force a rebuild, *winch* provides a ~-f/--force~ command line option that accepts the same arguments as ~-r/--rebuild~.
+
+#+begin_example
+$ uv run winch -c example/contrived.toml build -d image=debian-bookworm-edit -f last
+not rebuilding existing image: debian:bookworm
+force-removing existing image: debian-bookworm-edit
+Untagged: localhost/debian-bookworm-edit:latest
+Deleted: a6351fa2dade519407e2b6b394245d59b42abb703c56d633f29c5b35fcb5bb45
+Deleted: 3b57ff160cf4aec691ea432a6ad3a58a93d5c014072c54cfc1e19f187ca8f4bf
+STEP 1/3: FROM debian:bookworm
+STEP 2/3: RUN apt-get update && apt-get upgrade
+...
+COMMIT debian-bookworm-edit
+--> 2907d0e7a0d
+Successfully tagged localhost/debian-bookworm-edit:latest
+2907d0e7a0d90a63bd011e064d28bb923e1581cfea9581251fa6ee46c202e2f9
+#+end_example
+
+** Direct use of podman
+
+Once produced by *winch*, the images are nothing special and the user may use them directly via ~podman~ as desired.
+
+#+begin_example
+$ podman run -it debian-bookworm-edit 
+root@68341f6f17d8:/# which emacs
+/usr/bin/emacs
+#+end_example
+
+** Environment issues
+
+*winch* itself does not rely on any particular environment settings.  However,
+users may benefit from setting some of these variables:
+
+- ~TMPDIR~ :: set to some large/fast directory besides the default ~/tmp~.
+- ~CONTAINERS_STORAGE_CONF~ :: set to the path of a custom ~storage.conf~ configuration file so that ~podman~ locates container image files on some large/fast directory besides the default =~/.local/share/containers/storage/~.
+
+The content of the ~CONTAINERS_STORAGE_CONF~ file should look something like:
+
+#+begin_example
+[storage]
+driver = "vfs"
+graphroot = "/path/to/containers/storage"
+rootless_storage_path = "/path/to/containers/storage"
+#+end_example
+
+
+* Going further
+
+Here we describe other ways to use *winch*.
+
+** winch for Wire-Cell
 
 We initially developed *winch* to help build and test the [[https://github.com/wirecell/wire-cell-toolkit][Wire-Cell Toolkit]].  We provide the [[file:example/wct.toml][~wct.toml~]] configuration file as a starting point for building a large suite of images that test WCT on different platforms.  Here lists the current images (subject to change in the future):
 
@@ -224,7 +341,7 @@ alma-9-minimal-spack-wct-0.28.0-dev-apply-pointcloud-wctdev
 
 
 
-* winch for other things
+** winch for other things
 
 *winch* is general in that it can generate ~podman~ images for a variety of purposes.
 

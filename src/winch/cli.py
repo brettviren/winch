@@ -10,7 +10,7 @@ from .util import setup_logging, debug, warn, error, self_format, assure_file, S
 from .config import load as load_config
 from .viz import write_dot
 from .graph import Graph
-from .podman import build_image, image_exists
+from .podman import build_image, image_exists, remove_image
 from pathlib import Path
 import functools
 
@@ -161,10 +161,13 @@ def cmd_list(ctx, inodes, template):
 @click.option("-r","--rebuild", default="none",
               type=click.Choice(["none","all","deps","last"]),
               help="Control what to let podman attempt to rebuild if image exists")              
+@click.option("-f","--force", default="none",
+              type=click.Choice(["none","all","deps","last"]),
+              help="Force a rebuild by removing existing image that maps the selector")              
 @click.option("-o","--outpath", default='winch-contexts/{image}/Containerfile',
               help='A file path name for output files, may include "{format}" markup')
 @click.pass_context
-def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, outpath):
+def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force, outpath):
     '''
     Build container images from I-nodes.
 
@@ -174,10 +177,21 @@ def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, outpat
         idata = ctx.obj.graph.data(inode)
         image = idata[image_attribute]
 
-        if (image_exists(image) and
-            (rebuild == "none" 
-             or (rebuild == "deps" and inode == inodes[-1])
-             or (rebuild == "last" and inode != inodes[-1]))):
+        if image_exists(image) and (
+                force == "all"
+                or
+                (force == "deps" and inode != inodes[-1])
+                or
+                (force == "last" and inode == inodes[-1])):
+            print(f'force-removing existing image: {image}')
+            remove_image(image)
+
+        if image_exists(image) and (
+                rebuild == "none" 
+                or
+                (rebuild == "deps" and inode == inodes[-1])
+                or
+                (rebuild == "last" and inode != inodes[-1])):
             print(f'not rebuilding existing image: {image}')
             continue
         try:

@@ -46,13 +46,6 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /
 RUN bash -c "echo eval '$(direnv hook bash)' >> $HOME/.bashrc"
 ENTRYPOINT ["bash","--login"]
 """
-# fixme:
-# - [x] install man
-# - [x] add direnv setup to .bashrc
-# - [x] switch from apt to apt-get to avoid innocuous warning about stable CLI
-# - [x] install clang package
-# - [x] install autoconf package
-
 # This kind represents one "ecosystem".  Future may inculude UPS or FNALSPACK
 [spack]
 parent_kind = ["debian_minimal", "alma_minimal"]
@@ -83,23 +76,17 @@ RUN /spack/bin/spack install --fail-fast --no-cache --show-log-on-error -j 10 {s
 ENTRYPOINT ["bash","--login"]
 """
 
-# This kind of node represents building a developer view and doing the tests
-[spackdev]
+# This kind of node represents building a developer view for WCT.
+[spackview]
 parent_kind = "spackage"
-image = '{parent[image]}-dev-{gitref}'
-label = '{parent[label]} DEV {gitref}'
+image = '{parent[image]}-view'
+label = '{parent[label]} view'
 package = "wire-cell-toolkit"
-#gitref = ["master","apply-pointcloud"]
-gitref = "apply-pointcloud"
 containerfile = """
 FROM {parent[image]}
-RUN /spack/bin/spack view -e wire-cell-toolkit add -i winch/local wire-cell-toolkit
-RUN git clone --branch {gitref} --single-branch https://github.com/WireCell/wire-cell-toolkit.git winch/toolkit
-RUN git clone https://github.com/WireCell/wire-cell-python.git winch/python
+RUN /spack/bin/spack view -e {package} add -i winch/local {package}
 COPY dot.envrc winch/.envrc
 """
-# fixme:
-# - [x] remove direnv hook from here when it's put in debian-minimal
 files = { "dot.envrc" = """
 load_prefix "$PWD/local"
 layout python
@@ -126,21 +113,23 @@ export BATS_LIB_PATH=$PWD/toolkit/test
 # Find python modules
 export PYTHONPATH=$PWD/python
 """}
-# fixme:
-# - [x] remove PATH_add's in favor of ./wcb install into local
 
 
 [wctdev]
-parent_kind = "spackdev"
+parent_kind = "spackview"
 image = '{parent[image]}-wctdev'
 label = '{parent[label]} WCT dev'
+#gitref = ["master","apply-pointcloud"]
+gitref = "apply-pointcloud"
+# fixme:
+# - [ ] variants for GCC and Clang.
 containerfile = """
 FROM {parent[image]}
+RUN git clone --branch {gitref} --single-branch https://github.com/WireCell/wire-cell-toolkit.git winch/toolkit
+RUN git clone https://github.com/WireCell/wire-cell-python.git winch/python
 RUN cd /winch/python/ && direnv allow && python -m pip install .
 RUN cd /winch/toolkit/ && direnv allow && ./wcb configure --prefix=$PREFIX --boost-mt --boost-libs=$PREFIX/lib --boost-include=$PREFIX/include --with-jsonnet-libs=gojsonnet --with-root=$PREFIX
 RUN cd /winch/toolkit/ && direnv allow && ./wcb 
 RUN cd /winch/toolkit/ && direnv allow && ./wcb install
 RUN cd /winch/toolkit/ && direnv allow && ./wcb --tests
 """
-# fixme:
-# - [ ] variants for GCC and Clang.
