@@ -38,10 +38,10 @@ RUN apt update \
     && \
     apt-get install -y \
       build-essential ca-certificates coreutils curl gfortran git gpg clang autoconf \
-      lsb-release unzip zip direnv man-db \
+      lsb-release unzip zip direnv man-db emacs \
       python-is-python3 python3 python3-distutils python3-venv python3-click python3-yaml \
     && \
-    apt clean
+    apt-get clean
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
 RUN bash -c "echo eval '$(direnv hook bash)' >> $HOME/.bashrc"
 ENTRYPOINT ["bash","--login"]
@@ -72,7 +72,7 @@ version = ["master", "0.28.0"]
 spec = "{package}@{version}"
 containerfile = """
 FROM {parent[image]}
-RUN /spack/bin/spack install --fail-fast --no-cache --show-log-on-error -j 10 {spec} || true
+RUN /spack/bin/spack install --fail-fast --no-cache --show-log-on-error -j 10 {spec} ^python@3.11.9
 ENTRYPOINT ["bash","--login"]
 """
 
@@ -84,9 +84,20 @@ label = '{parent[label]} view'
 package = "wire-cell-toolkit"
 containerfile = """
 FROM {parent[image]}
-RUN /spack/bin/spack view -e {package} add -i winch/local {package}
+RUN /spack/bin/spack view -e {package} add -i winch/local {package} ^python@3.11.9
 COPY dot.envrc winch/.envrc
+RUN cd /winch && direnv allow
+WORKDIR /winch
+
+ENV PREFIX /winch/local
+ENV PATH /winch/local/bin:/bin:/usr/bin:/usr/local/bin
+ENV LD_LIBRARY_PATH /winch/local/lib
+ENV PKG_CONFIG_PATH /winch/local/share/pkgconfig:/winch/local/lib/pkgconfig:/winch/local/lib64/pkgconfig
+ENV WIRECELL_PATH /winch/toolkit/cfg:/winch/local/share/wirecell
+ENV BATS_LIB_PATH /winch/toolkit/test
+
 """
+
 files = { "dot.envrc" = """
 load_prefix "$PWD/local"
 layout python
@@ -121,15 +132,44 @@ image = '{parent[image]}-wctdev'
 label = '{parent[label]} WCT dev'
 #gitref = ["master","apply-pointcloud"]
 gitref = "apply-pointcloud"
-# fixme:
-# - [ ] variants for GCC and Clang.
+
+# fight various failures
+#kludge = 'py-setuptools^python@3.11.9 py-pip^python@3.11.9 zlib'
+kludge = 'zlib'
+
 containerfile = """
 FROM {parent[image]}
-RUN git clone --branch {gitref} --single-branch https://github.com/WireCell/wire-cell-toolkit.git winch/toolkit
-RUN git clone https://github.com/WireCell/wire-cell-python.git winch/python
-RUN cd /winch/python/ && direnv allow && python -m pip install .
-RUN cd /winch/toolkit/ && direnv allow && ./wcb configure --prefix=$PREFIX --boost-mt --boost-libs=$PREFIX/lib --boost-include=$PREFIX/include --with-jsonnet-libs=gojsonnet --with-root=$PREFIX
-RUN cd /winch/toolkit/ && direnv allow && ./wcb 
-RUN cd /winch/toolkit/ && direnv allow && ./wcb install
-RUN cd /winch/toolkit/ && direnv allow && ./wcb --tests
+
+
+RUN git clone https://github.com/WireCell/wire-cell-python.git /winch/python
+
+RUN /spack/bin/spack install --fail-fast --no-cache --show-log-on-error -j 10 {kludge}
+RUN /spack/bin/spack view add -i /winch/local {kludge}
+
+
+WORKDIR /winch/python
+RUN python --version
+RUN python setup.py install
+RUN echo "$PREFIX"
+
+RUN git clone --branch {gitref} --single-branch https://github.com/WireCell/wire-cell-toolkit.git /winch/toolkit
+WORKDIR /winch/toolkit
+
+ENV PYTHONPATH /winch/python
+ENV LIBRARY_PATH /winch/local/lib
+
+RUN ./wcb configure --prefix=$PREFIX --boost-mt --boost-libs=$PREFIX/lib --boost-include=$PREFIX/include --with-jsonnet-libs=gojsonnet --with-jsonnet=$PREFIX --with-root=$PREFIX || cat /winch/toolkit/build/config.log
+RUN cd /winch/toolkit && ./wcb 
+RUN cd /winch/toolkit && ./wcb install
+
+RUN cd /winch/toolkit && ./build/util/wcdoctest-util
+RUN cd /winch/toolkit && ./build/aux/wcdoctest-aux
+RUN cd /winch/toolkit && ./build/gen/wcdoctest-gen
+RUN cd /winch/toolkit && ./build/test/wcdoctest-test
+RUN cd /winch/toolkit && ./build/img/wcdoctest-img
+RUN cd /winch/toolkit && ./build/clus/wcdoctest-clus
+
+RUN cd /winch/toolkit && ./wcb --tests
 """
+
+

@@ -253,3 +253,17 @@ def assure_file(path, content=None):
     path.write_text(content)
     
 
+def looks_like_digest(thing):
+    if not isinstance(thing, str):
+        return False
+
+    if len(thing) != 40:        # sha1
+        return False
+
+    try:
+        int(thing, 16)
+    except ValueError:
+        return False
+
+    return True
+

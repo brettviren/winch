@@ -6,7 +6,7 @@ Command line interface to winch.
 
 import click
 
-from .util import setup_logging, debug, warn, error, self_format, assure_file, SafeDict
+from .util import setup_logging, debug, warn, error, self_format, assure_file, SafeDict, looks_like_digest
 from .config import load as load_config
 from .viz import write_dot
 from .graph import Graph
@@ -14,12 +14,23 @@ from .podman import build_image, image_exists, remove_image
 from pathlib import Path
 import functools
 
+# The implicit key to use when user does not provide key=value selector.  This
+# key is domain specific so should not be hard-wired but instead a top-level CLI
+# options should be used.  For now.... FIXME.
+instance_attribute = 'image'
+
 class Main:
-    def __init__(self, config=None):
+    def __init__(self, config=None,):
         if config is None:
             return
         self.opts = config.pop("winch",{})
-        self.graph = Graph(**config)
+        self._graph = Graph(**config)
+
+    @property
+    def graph(self):
+        if hasattr(self, '_graph'):
+            return self._graph
+        raise click.BadParameter('no configuration provided.  Use "winch -c/--config" or set WINCH_CONFIG')
 
 
 cmddef = dict(context_settings = dict(auto_envvar_prefix='WINCH',
@@ -52,8 +63,32 @@ def cmd_kpaths(ctx):
         print(','.join(one))
             
 
+def to_nodes(gr, desc):
+    '''
+    Return node name given description.
 
-def select_inodes(ctx, kpath=None, kind=None, deps=None, images=None):
+    Description is string or list-of-string.  list-of-string returned for both.
+    '''
+    if isinstance(desc, str):
+        return to_nodes(gr, [desc])
+
+    ret = list()
+    for one in desc:
+        if looks_like_digest(one):
+            ret.append(one)
+            continue
+        if '=' in one:
+            key, value = one.split("=", 1)
+        else:
+            key = instance_attribute
+            value = one
+        ret += [n for n,d in gr.nodes.data() if d.get(key, None) == value]
+    return ret
+
+def select_inodes(ctx, kpath=None, kind=None, deps=None, instances=None, none_is_all=False):
+    '''
+    Select instance nodes from the I-graph returning their node IDs.
+    '''
 
     if kpath:
         kpath = tuple(kpath.split(","))
@@ -63,13 +98,8 @@ def select_inodes(ctx, kpath=None, kind=None, deps=None, images=None):
         return inodes
 
     if deps:
-        nodes = [deps]
-        if '=' in deps:
-            key, value = deps.split('=', 1)
-            nodes = [n for n,d in ctx.obj.graph.I.nodes.data() if d.get(key, None) == value]
-
         ret = list()
-        for inode in nodes:
+        for inode in to_nodes(ctx.obj.graph.I, deps):
             for got in ctx.obj.graph.ipath(inode):
                 ret.append(got)
         return ret
@@ -77,52 +107,50 @@ def select_inodes(ctx, kpath=None, kind=None, deps=None, images=None):
     if kind:
         return ctx.obj.graph.from_kind(kind)
 
-    if images:
-        if images == "all":
-            return ctx.obj.graph.I.nodes
+    if not instances and none_is_all:
+        instances = 'all'
 
-        ret = list()
-        for image in images.split(","):
-            if '=' in image:
-                key, value = image.split("=", 1)
-                ret += [n for n,d in ctx.obj.graph.I.nodes.data() if d.get(key, None) == value]
-            else:
-                ret.append(image)
-        return ret
-    return []
+    if not instances:
+        return []
+    
+    if instances == "all":
+        return ctx.obj.graph.I.nodes
+
+    return to_nodes(instances.split(","))
 
 
-def selection(func):
-    '''
-    A decorator for a command applied to a selection of I-nodes.
+def selection(none_is_all=False):
+    def decorator(func):
+        '''
+        A decorator for a command applied to a selection of I-nodes.
 
-    It provides a single 'inodes' attribute
-    '''
-    @click.option("-k","--kind", default=None, type=str,
-                  help='Limit to I-nodes made from K-node regardless of path')
-    @click.option("-d","--deps", default=None, type=str,
-                  help='Limit to I-nodes on which the given inode depends.')
-    @click.option("-i","--images", default=None, type=str,
-                  help='Limit to specific I-nodes.')
-    @click.pass_context
-    @functools.wraps(func)
-    def wrapper(ctx, *args, **kwds):
-        kpath = kwds.pop('kpath',None)
-        kind = kwds.pop('kind',None)
-        deps = kwds.pop('deps',None)
-        images = kwds.pop('images',None)
-        inodes = select_inodes(ctx, kpath, kind, deps, images)
-        if not inodes:
-            warn(f'no instances found')
-        kwds['inodes'] = inodes
-        return func(*args, **kwds)
-    return wrapper
-
+        It provides a single 'inodes' attribute
+        '''
+        @click.option("-k","--kind", default=None, type=str,
+                      help='Limit to I-nodes made from K-node regardless of path')
+        @click.option("-d","--deps", default=None, type=str,
+                      help='Limit to I-nodes on which the given inode depends.')
+        @click.option("-i","--instances", default=None, type=str,
+                      help='Limit to specific I-nodes.')
+        @click.pass_context
+        @functools.wraps(func)
+        def wrapper(ctx, *args, **kwds):
+            kpath = kwds.pop('kpath',None)
+            kind = kwds.pop('kind',None)
+            deps = kwds.pop('deps',None)
+            instances = kwds.pop('instances',None)
+            inodes = select_inodes(ctx, kpath, kind, deps, instances, none_is_all)
+            if not inodes:
+                warn(f'no instances found')
+            kwds['inodes'] = inodes
+            return func(*args, **kwds)
+        return wrapper
+    return decorator
 
 
 @cli.command("list")
-@selection
-@click.option("-t","--template", default="{ntype} {node} {image}",
+@selection(none_is_all=True)
+@click.option("-t","--template", default="{image}",
               help="The template for display")
 @click.pass_context
 def cmd_list(ctx, inodes, template):
@@ -140,7 +168,7 @@ def cmd_list(ctx, inodes, template):
     Providing -d/--deps gives an I-node as its node name (hash) or an
     "key=value" attribute.
 
-    Providing -i/--images gives a comma-separated list of I-node, each specified
+    Providing -i/--instances gives a comma-separated list of I-node, each specified
     by a node name (hash) or an "key=value" attribute.  A special entry "all"
     will match all I-nodes.
     '''
@@ -153,7 +181,7 @@ def cmd_list(ctx, inodes, template):
 
 
 @cli.command("build")
-@selection
+@selection()
 @click.option("--containerfile-attribute", default="containerfile",
               help="Name the attribute providing the Containerfile content")
 @click.option("--image-attribute", default="image",
@@ -212,7 +240,7 @@ def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force,
 
 
 @cli.command("render")
-@selection
+@selection()
 @click.option("-T", "--template-attribute", default=None,
               help="Name the attribute providing the content to render")
 @click.option("-t", "--template", default=None,

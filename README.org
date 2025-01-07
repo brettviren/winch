@@ -6,7 +6,7 @@ Said most generally, *winch* is a generator of text (strings or files) using a
 hierarchical, parameterized data structure that the user provides in a simple
 configuration file.
 
-*winch* also provides special support to generate and build *podman* container images.
+*winch* also provides special support to generate [[https://podman.io/][podman]] ~Containerfile~ files and build them into *podman* images.
 
 * How to use *winch*
 
@@ -14,88 +14,108 @@ This section describes how to install *winch* and run it using a provided exampl
 
 ** Requirements
 
-*winch* requires ~podman~, Python 3 with the Click and Neworkx packages for most basic use.
+*winch* requires Python 3 with the Click and Neworkx packages for the most basic usage.  In addition the ~podman~ command is required to build container images from a *winch* configuration.
 
 ** Installation
 
-*winch* is a Python package and should obey recent Python packaging norms (make a
-GitHub Issue if you find that it does not).  You may use your favorite
+*winch* is a Python package that follows "modern" Python packaging norms (make a
+GitHub Issue if it fails to do so).  You may use your favorite
 installation method and I recommend mine using [[https://github.com/astral-sh/uv][uv]]:
 
 #+begin_example
 $ uv tool install git+https://github.com/brettviren/winch
 #+end_example
 
-** Basic help
+Add option ~-U~ to update.  See also section [[Shell environment]].
 
-Run to print help:
+** Command line help
+
+*winch* provides command line help:
 
 #+begin_example
 $ winch
+$ winch <command> --help
 #+end_example
 
-You will need =~/.local/bin= in ~$PATH~ or you may run as: ~uvx winch~.
+If you installed as a ~uv tool~ add =~/.local/bin= to your ~$PATH~ or prefix ~uvx~ as in: ~uvx winch~.
 
 ** Commands
 
-You will next need a *winch* configuration file.  See section below for guidance.
-Here we show commands using the provided [[https://github.com/brettviren/winch/tree/master/example/contrived.toml][~contrived.toml~]] example configuration.
+Most *winch* commands require a *winch* configuration file.  Here we will give
+examples using [[https://github.com/brettviren/winch/tree/master/example/contrived.toml][~contrived.toml~]] and set ~WINCH_CONFIG~ to keep the examples
+simple.  See section [[Shell environment]] for information about environment
+variables and section [[Configuration]] for how to craft your own *winch*
+configuration file.
 
-List possible images:
+First, we may list all possible instances:
 
 #+begin_example
-$ winch -c contrived.toml list -i all
+$ export WINCH_CONFIG=/path/to/winch/example/contrived.toml
+$ winch list
+debian:bookworm
+debian:trixie
+debian-bookworm-minimal
+debian-trixie-minimal
+...
 #+end_example
 
-Generate a *winch instance graph*:
+As described more below, the image layer instances form a directed graph.  *winch*
+can render this graph to a GraphViz dot file:
 
 #+begin_example
-$ winch -c contrived.toml dot -t '{image}' > contrived.dot
+$ winch dot -t '{image}' > contrived.dot
 $ dot -Tsvg -o contrived.svg contrived.dot
 #+end_example
+
+The ~-t/--template~ option sets what label to display in the graph nodes.  The
+~image~ label is domain-specific but in the example it represents the name given
+to a ~FROM~ command in a ~Containerfile~.  The generated graph looks like:
 
 #+attr_html: :width 90%
 #+attr_latex: :width 90%
 [[./example/contrived.svg]]
 
-Build one or all images:
+Why it looks like this is described more in section [[How *winch* works]].
+
+You may also apply the configuration to build *podman* container images:
 
 #+begin_example
-$ winch -c winch.toml build -i image=debian-bookworm-edit
+$ winch -c winch.toml build -i debian-bookworm-edit
 $ winch -c winch.toml build -i all
 #+end_example
 
-Here, we select an instance with ~-i image=debian-bookworm-edit~ that provides a
-selector.  One may instead give a hash shown from ~list~ as ~-i <hash>~.
+Here, we select a specific instance by the default instance attribute (/ie/ ~image~)
+with ~-i debian-bookworm-edit~.
 
-The ~-d/--deps~ is an important alternative to ~-i/--image~ when there are many
+The ~-d/--deps~ is an important alternative to ~-i/--instance~ when there are many
 possible image layers.  It and other options are describe in the section [[Usage
-Tips]].
+tips]].
 
 
 
-* Configure *winch*
+* Configuration
 
-*winch* reads a brief configuration file written in the simple [[https://toml.io/][TOML]] format.  Each
+*winch* reads a configuration file written in the simple [[https://toml.io/][TOML]] format.  Each
 top level TOML "table" (aka "section" or "stanza" or "object") provides a set of
 parameters that represent one *kind* of container image layer.
 
 Parameters are generally considered string type and may include Python ~{format}~
-markup.  Some special non-string types are described below.  The user is free to
-invent parameters as needed while *winch* will interpret these parameters
+markup.  Some special non-string *variant* types are described below.  The user is free to
+invent parameters as needed while *winch* will interpret a few parameters
 specially:
 
 - ~image~ :: the name of the image layer such as used in a ~FROM~ line of a ~Containerfile~.
 - ~containerfile~ :: the content of a ~Containerfile~.
-- ~parent_kind~ :: optional, one or a *list* of other TOML tables to provide a possible parent image layer.
+- ~parent_kind~ :: zero (omitted), one or a *list* of other TOML tables to provide a possible parent image layer.
 - ~files~ :: a (sub) table (aka ~dict~) which maps file paths relative to the directory holding ~Containerfile~ to their file content.
 
 Notes
 
-- The user may tell *winch* to use different parameters that serve the role of
-  ~image~ and ~containerfile~ via command line arguments.
+- The user may tell ~winch build~ to use different attribute names that serve the
+  role of ~image~ and ~containerfile~.
 
-- The ~Containerfile~ template may include a ~COPY~ to add files listed in ~files~ to the image.
+- The ~files~ attribute is intended to provide content of files to add to a
+  container image via the ~Containerfile~ directive ~COPY~.
 
 If a ~parent_kind~ attribute exists then the string values in a table's parameters
 may refer to these parameters which *winch* provides implicitly:
@@ -204,13 +224,42 @@ traversal algorithm:
 7. Continue to the next path.
 
 
-* Usage Tips
+* Usage tips
+
+
+** Instance selection
+
+Many of the ~winch~ commands take options to select a subset of instances from the
+I-graph.
+
+#+begin_example
+-k, --kind TEXT      Limit to I-nodes made from K-node regardless of path
+-d, --deps TEXT      Limit to I-nodes on which the given inode depends.
+-i, --instances TEXT    Limit to specific I-nodes.
+#+end_example
+
+The ~-d/--deps~ and ~-i/--instances~ take options like:
+
+- ~all~ :: a literal string that matches all instances
+- ~<key>=<value>~ :: all instances that have a matching attribute
+- ~<value>~ :: all instances that have a matching default "instance attribute" (~image~)
+- ~<digest>~ :: a 40 character hexadecimal SHA1 digest.
+
+The ~<digest>~ is a hash over the instance data and used internally to identify nodes in the I-graph.  The user may display digests and image names (and other attributes) with:
+
+#+begin_example
+$ uv run winch list -t '{node} {image}'
+1ac89aa1b74b245307180e4613430a0d529e8d91 debian:bookworm
+a067aa9c38dfb566bbddb6d6d2056641bc6fbae9 debian:trixie
+...
+#+end_example
+
 
 ** Maybe rebuilding
 
-By default, *winch* will not ask ~podman~ to rebuild an image that already exists
+By default, *winch* will not ask *podman* to rebuild an image that already exists
 even if the ~Containerfile~ file may have changed.  This avoids the time needed
-for ~podman~ to examine the existing image.  Using a ~-d/--deps~ selection example,
+for *podman* to examine the existing image.  Using a ~-d/--deps~ selection example,
 *winch* will notify the user when this occurs with lines like:
 
 #+begin_example
@@ -219,7 +268,7 @@ not rebuilding existing image: debian:bookworm
 not rebuilding existing image: debian-bookworm-edit
 #+end_example
 
-You can let ~podman~ consider rebuilding with ~-r/--rebuild~ value of ~none~, ~all~,
+You can let *podman* consider rebuilding with ~-r/--rebuild~ value of ~none~, ~all~,
 ~deps~ or ~last~.
 
 #+begin_example
@@ -234,7 +283,7 @@ Successfully tagged localhost/debian-bookworm-edit:latest
 a6351fa2dade519407e2b6b394245d59b42abb703c56d633f29c5b35fcb5bb45
 #+end_example
 
-Repeating shows ~podman~ taking time to decide not to actually rebuild:
+Repeating shows *podman* taking time to decide not to actually rebuild:
 
 #+begin_example
 $ uv run winch -c example/contrived.toml build -d image=debian-bookworm-edit -r last
@@ -253,7 +302,7 @@ a6351fa2dade519407e2b6b394245d59b42abb703c56d633f29c5b35fcb5bb45
 
 ** Force rebuilding
 
-When state resides outside the ~Containerfile~ then ~podman~ can not detect the need to change.  This is commonly experienced when a layer builds the ~HEAD~ of some changing ~git~ branch.  To force a rebuild, *winch* provides a ~-f/--force~ command line option that accepts the same arguments as ~-r/--rebuild~.
+When state resides outside the ~Containerfile~ then *podman* can not detect the need to change.  This is commonly experienced when a layer builds the ~HEAD~ of some changing ~git~ branch.  To force a rebuild, *winch* provides a ~-f/--force~ command line option that accepts the same arguments as ~-r/--rebuild~.
 
 #+begin_example
 $ uv run winch -c example/contrived.toml build -d image=debian-bookworm-edit -f last
@@ -271,9 +320,9 @@ Successfully tagged localhost/debian-bookworm-edit:latest
 2907d0e7a0d90a63bd011e064d28bb923e1581cfea9581251fa6ee46c202e2f9
 #+end_example
 
-** Direct use of podman
+** Direct use of *podman*
 
-Once produced by *winch*, the images are nothing special and the user may use them directly via ~podman~ as desired.
+Once produced by *winch*, the images are nothing special and the user may use them directly via *podman* as desired.
 
 #+begin_example
 $ podman run -it debian-bookworm-edit 
@@ -281,22 +330,53 @@ root@68341f6f17d8:/# which emacs
 /usr/bin/emacs
 #+end_example
 
-** Environment issues
+** Shell environment
 
-*winch* itself does not rely on any particular environment settings.  However,
-users may benefit from setting some of these variables:
+*winch* itself does not rely on any particular environment settings however it
+supports setting command line option defaults using environment variables.  Each
+option has a variable with prefix ~WINCH_~ and postfix formed by the long option
+name translated to upper-case.  If you find yourself making many calls to ~winch~
+the most useful setting is:
+
+- ~WINCH_CONFIG~ :: set default for ~winch -c/--config=<file>~
+
+Some variables that control *podman* are useful to set particularly if your ~/tmp~
+or ~$HOME~ file systems are small and/or slow and your host provides better ones.
 
 - ~TMPDIR~ :: set to some large/fast directory besides the default ~/tmp~.
-- ~CONTAINERS_STORAGE_CONF~ :: set to the path of a custom ~storage.conf~ configuration file so that ~podman~ locates container image files on some large/fast directory besides the default =~/.local/share/containers/storage/~.
+- ~CONTAINERS_STORAGE_CONF~ :: set to the path of a custom ~storage.conf~ configuration file so that *podman* locates container image files on some large/fast directory besides the default =~/.local/share/containers/storage/~.
 
 The content of the ~CONTAINERS_STORAGE_CONF~ file should look something like:
 
 #+begin_example
 [storage]
-driver = "vfs"
+driver = "overlay"
 graphroot = "/path/to/containers/storage"
 rootless_storage_path = "/path/to/containers/storage"
 #+end_example
+
+
+** Configuration guidance
+
+When using *winch* for building *podman* images it is important that each instance
+has a unique ~image~ attribute value even with multiple parent kinds and/or
+variants are employed.  A simple way to assure that is with the pattern of
+taking on a unique label to the parent's ~image~.  Eg:
+
+#+begin_src toml
+  [some_kind]
+  parent_kind = ["parent1", "parent2"]
+  variant = ["value1", "value2"]
+  image = '{parent[image]}-{variant}'
+#+end_src
+
+If the *kind* has no variant parameters then one may extend the parent ~image~ with a literal value or the special parameter ~'{kind}'~ can be used which takes the value of the table name.
+
+#+begin_src toml
+  [some_kind]
+  parent_kind = ["parent1", "parent2"]
+  image = '{parent[image]}-{kind}'
+#+end_src
 
 
 * Going further
@@ -343,7 +423,7 @@ alma-9-minimal-spack-wct-0.28.0-dev-apply-pointcloud-wctdev
 
 ** winch for other things
 
-*winch* is general in that it can generate ~podman~ images for a variety of purposes.
+*winch* is general in that it can generate *podman* images for a variety of purposes.
 
 *winch* is even more general in that it can generate strings and files for any
 purposes where the hierarchical graph traversal is useful.  The ~winch render~
@@ -381,4 +461,7 @@ winch-render/
 
 9 directories, 8 files
 #+end_example
+
+
+
 
