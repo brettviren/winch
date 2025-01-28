@@ -1,0 +1,137 @@
+#+title: winch for Wire-Cell Toolkit
+
+winch is intended primarily for use with Wire-Cell Toolkit.
+
+The [[file:../example/wct.toml]] example also provides the nominal default for performing various WCT builds, tests and house keeping as described in this document.
+
+* Building, testing and test historical data
+
+A full build and test of the tip of a release branch can be exercised with:
+
+#+begin_example
+$ uv run winch build \
+  -d debian-bookworm-minimal-spack-wct-master-view-wctdev-0.29.x
+#+end_example
+
+Note, subsequent pushes to the branch (0.29.x) will not lead to this image
+getting rebuild.  One must "force" the rebuild:
+
+#+begin_example
+$ uv run winch build --force last \
+  -d debian-bookworm-minimal-spack-wct-master-view-wctdev-0.29.x
+#+end_example
+
+A subsequent layer will package up the test historical data.  Here, it is
+beneficial to not give podman a chance to rebuild prior layers.  For reasons
+unknown, the ~./wcb --tests~ line always gets rerun.
+
+#+begin_example
+$ uv run winch build --rebuild last \
+  -d debian-bookworm-minimal-spack-wct-master-view-wctdev-0.29.x-datarepo
+...
+-rw-r--r-- 1 root root 183316480 Jan 24 18:03 /winch/toolkit/history-0.29.5-2-ge589f946.tar
+#+end_example
+
+And, this tar file can be extract with:
+
+#+begin_example
+$ winch extract \
+  -i debian-bookworm-minimal-spack-wct-master-view-wctdev-0.29.x-datarepo \
+  /winch/toolkit/history-0.29.5-2-ge589f946.tar
+#+end_example
+
+* Evolving WCT with winch
+
+Over time, various things related to winch and WCT are expected to evolve:
+
+- The set of user's locally built podman images.
+- The ~wct.toml~ file (novel kinds, changes in release version attributes).
+- Novel commits to branches.
+
+* Debugging failures
+
+The ~-wctdev-<version>~ image may fail during compilation or during testing.
+
+** Run last good container after a failed build
+
+A build failure will halt podman.  The last successful layer can be run and the
+failed command can be repeated.
+
+#+begin_example
+$ winch build -d debian-bookworm-minimal-spack-wct-master-view-wctdev-0.27.x-datarepo
+...
+Build failed
+ -> task in 'WireCellUtil' failed with exit status 1 (run with -v to display more information)
+ -> task in 'WireCellAux' failed with exit status 1 (run with -v to display more information)
+Error: building at STEP "RUN cd /winch/toolkit && ./wcb": while running runtime: exit status 1
+...
+subprocess.CalledProcessError: Command '['/usr/bin/podman', 'build', '-t', 'debian-bookworm-minimal-spack-wct-master-view-wctdev-0.27.x', 'winch-contexts/debian-bookworm-minimal-spack-wct-master-view-wctdev-0.27.x']' returned non-zero exit status 1.
+#+end_example
+
+The named image did not build.  We can find the last image layer and run it:
+
+#+begin_example
+$ podman images
+REPOSITORY TAG         IMAGE ID      CREATED         SIZE
+<none>     <none>      157247c8e399  5 minutes ago   5.9 GB
+...
+$ podman run -it 157247c8e399
+#+end_example
+
+Looking at the ~Error: building at STEP ...~ message we can attempt to reproduce the failure interactively:
+
+#+begin_example
+root@fdd7119176f1:/winch/toolkit# ./wcb
+#+end_example
+
+In this case, we see this older release is not compatible with newer SPDLOG
+provided by the newer dependencies.  This was fixed in [[https://github.com/WireCell/wire-cell-toolkit/pull/296][wire-cell-toolkit/#296]]
+and is in 0.28.0 but not in 0.27.1.  We'll leave this as-is.
+
+** Test failures
+
+The ~wcdoctest-*~ commands are run directly by podman and their failure will halt
+the build.  On the other hand, failure of the various ~test_*~ programs is not
+telegraphed through ~wcb~ and so we only receive notice via a ~tests that fail~
+list and the image build will complete.
+
+The developer should follow up on and fix these failures.
+
+** Committing from a container
+
+This can be difficult.  Here are a few approaches.
+
+*** Fix, diff-inside and patch-outside
+
+Fix the bug in the container.  Do a ~git diff~ and capture that text to a ~.patch~, apply that patch to a git clone outside the container and commit/push as usual.
+
+
+t.b.d.
+
+* Current known test failures
+
+** Upstream issues
+
+https://github.com/WireCell/wire-cell-toolkit/issues/357
+
+and links to other issues there.
+
+** Local build issues
+
+
+No pdf support in Spack's graphviz.  Apparently need ~poppler~ and/or ~pangocairo~
+
+#+begin_example
+✗ dotify dag
+   tags: dotify
+   (from function `saveout' in file test/wct-bats.sh, line 368,
+    in test file img/test/test-wct-uboone-img.bats, line 65)
+     `saveout -c plots "$dag_viz"' failed
+   2025-01-27 16:55:30.966930596 [ I ] RUNNING: dotify_graph dag.json dag.pdf
+   2025-01-27 16:55:31.363712127 [ I ] OUTPUT:
+   2025-01-27 16:55:30.983472467 [ I ] RUNNING: /winch/local/bin/wirecell-pgraph dotify -J /winch/toolkit/cfg dag.json dag.pdf
+   2025-01-27 16:55:31.351215966 [ I ] OUTPUT:
+   Format: "pdf" not recognized. Use one of: canon cmap cmapx cmapx_np dot dot_json eps fig gv imap imap_np ismap json json0 pic plain plain-ext pov ps ps2 svg svg_inline svgz tk xdot xdot1.2 xdot1.4 xdot_json
+#+end_example
+
+

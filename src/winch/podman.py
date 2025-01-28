@@ -90,3 +90,45 @@ def image_exists(name):
     podman = which("podman")
     return 0 == podman(['image', 'exists', name], check=False).returncode
 
+
+def create_container(image, name=None):
+    '''
+    Create a container from image with name, if given.  Return container ID.
+    '''
+    if not image_exists(image):
+        raise IOError(f'no such image: {image}')
+    args = ['create']
+    if name:
+        args += ['--name',name]
+    args += [image]
+
+    podman = which("podman")
+    got = podman(args, capture_output=True)
+    return got.stdout.decode().strip()
+
+
+def remove_container(cid):
+    '''
+    Remove a contain by a container ID or name.
+    '''
+    podman = which("podman")
+    podman(["rm", cid])
+
+
+def container_copy(cid, path, outpath='.'):
+    '''
+    Copy file at path from running container cid to outapath.
+    '''
+    podman = which("podman")
+    podman(["cp", f'{cid}:{path}', outpath])
+
+
+def image_copy(image, path, outpath='.'):
+    '''
+    Extract path from image an copy it to host outpath
+    '''
+    cid = create_container(image)
+    container_copy(cid, path, outpath)
+    remove_container(cid)
+
+    

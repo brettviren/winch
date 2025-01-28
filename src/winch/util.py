@@ -34,13 +34,16 @@ class TempDir:
 
     def __enter__(self):
         self.path = Path(tempfile.mkdtemp(*self._args))
+        debug(f'made tmpdir: {self.path}')
         return self.path
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self._abandon:
+            debug(f'abandon tmpdir: {self.path}')
             return
         if self.path:
             import shutil
+            debug(f'remove tmpdir: {self.path}')
             shutil.rmtree(self.path)
 
 
@@ -229,6 +232,8 @@ def which(exe):
             cmd = [path]
             if args is not None:
                 cmd += list(args)
+
+        debug(f'running {cmd=} {opts=}')
         return subprocess.run(cmd, **opts)
     return runner
 

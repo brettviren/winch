@@ -10,7 +10,7 @@ from .util import setup_logging, debug, warn, error, self_format, assure_file, S
 from .config import load as load_config
 from .viz import write_dot
 from .graph import Graph
-from .podman import build_image, image_exists, remove_image
+from .podman import build_image, image_exists, remove_image, image_copy
 from pathlib import Path
 import functools
 
@@ -186,7 +186,7 @@ def cmd_list(ctx, inodes, template):
               help="Name the attribute providing the Containerfile content")
 @click.option("--image-attribute", default="image",
               help="Name the attribute providing the image name")
-@click.option("-r","--rebuild", default="none",
+@click.option("-r","--rebuild", default="all",
               type=click.Choice(["none","all","deps","last"]),
               help="Control what to let podman attempt to rebuild if image exists")              
 @click.option("-f","--force", default="none",
@@ -205,16 +205,21 @@ def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force,
         idata = ctx.obj.graph.data(inode)
         image = idata[image_attribute]
 
-        if image_exists(image) and (
-                force == "all"
-                or
-                (force == "deps" and inode != inodes[-1])
-                or
-                (force == "last" and inode == inodes[-1])):
+        exists = image_exists(image)
+        debug(f'{exists=} {inode=} {image=} {force=} {rebuild=}')
+
+        extra_args = list()
+        if (force == "all"
+            or
+            (force == "deps" and inode != inodes[-1])
+            or
+            (force == "last" and inode == inodes[-1])):
             print(f'force-removing existing image: {image}')
             remove_image(image)
+            extra_args.append("--no-cache")
+            debug(f'building {image} with no cache')
 
-        if image_exists(image) and (
+        if exists and (
                 rebuild == "none" 
                 or
                 (rebuild == "deps" and inode == inodes[-1])
@@ -236,7 +241,7 @@ def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force,
             fcont = fcont.format_map(SafeDict(node=inode, **idata))
             assure_file(fpath, fcont)
 
-        build_image(image, cpath)
+        build_image(image, cpath, *extra_args)
 
 
 @cli.command("render")
@@ -277,6 +282,18 @@ def render(ctx, inodes, template, template_attribute, outpath):
         otext = tmpl.format_map(SafeDict(node=inode, **idata))
         assure_file(opath, otext)
 
+
+@cli.command("extract")
+@click.option("-i","--image", default=None, type=str,
+              help='Name the podman image.')
+@click.option("-o","--output", default=".", type=str,
+              help='Path of file or directory to save extracted file.')
+@click.argument("path")
+def extract(image, output, path):
+    '''
+    Extract (cp) a path from an image to the host output path.
+    '''
+    image_copy(image, path, output)
 
 
 @cli.command("dot")

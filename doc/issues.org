@@ -1,0 +1,32 @@
+#+title: winch issues
+
+This document collects some known "features" and their work-around.
+
+* image is in use by a container
+
+During a forced rebuild:
+
+#+begin_example
+$ uv run winch build -d debian-bookworm-minimal-spack-wct-master-view-wctdev-master -f last
+#+end_example
+
+You may encounter a message like:
+
+#+begin_example
+force-removing existing image: debian-bookworm-minimal-spack-wct-master-view-wctdev-master
+Error: image used by c41dbb60e08740016da9646dc82646485a024737d9d4e31ff96b817048532502: image is in use by a container: consider listing external containers and force-removing image
+... traceback ...
+subprocess.CalledProcessError: Command '['/usr/bin/podman', 'image', 'rm', 'debian-bookworm-minimal-spack-wct-master-view-wctdev-master']' returned non-zero exit status 2.
+#+end_example
+
+This is due to podman keeping an "external" (?) container alive.  Such containers may be viewed with:
+
+#+begin_example
+$ podman container list --external
+#+end_example
+
+Most likely you may purge the problematic image (and its containers) safely with:
+
+#+begin_example
+$ podman rmi --force localhost/debian-bookworm-minimal-spack-wct-master-view-wctdev-master
+#+end_example
