@@ -1,0 +1,105 @@
+# This is for eic-opticks for FD3
+#
+# This describes "kinds" of images.  Each is a flat bag of parameters of
+# templated string values or lists of strings.  Lists imply an outer product is
+# performed to make instances.  Strings are formatted with values of other
+# parameters.  A kind may have zero or more parent kinds.  One instance is made
+# for each instance of the parent kind. 
+
+[debian]
+# Params are used for formatting other variables and templates.  A params of
+# type list form a cross product.  
+#release = ['bookworm','trixie']
+release = ['bookworm']
+image = '{kind}:{release}'
+label = '{kind} {release}'
+
+[alma]
+release = ["9"]
+image = 'almalinux:{release}'
+label = '{kind} {release}'
+
+[alma_minimal]
+# Each image class has zero or more parents kinds.
+parent_kind = "alma"
+image = '{parent_kind}-{parent[release]}-minimal'
+label = '{parent[label]} minimal'
+# but will be given a single "parent" which is the data structure from the
+# single instance upon which a generated instance is built.
+containerfile = """
+FROM {parent[image]}
+"""
+
+[debian_minimal]
+parent_kind = "debian"
+image = '{parent_kind}-{parent[release]}-minimal'
+label = '{parent[label]} minimal'
+# The template will be formated with params of this node and the parent.
+containerfile = """
+FROM {parent[image]}
+RUN apt update \
+    && \
+    apt-get install -y \
+      build-essential ca-certificates coreutils curl gfortran git gpg clang autoconf \
+      lsb-release unzip zip direnv man-db emacs \
+      python-is-python3 python3 python3-distutils python3-venv python3-click python3-yaml \
+    && \
+    apt-get clean
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+RUN bash -c "echo eval '$(direnv hook bash)' >> $HOME/.bashrc"
+ENTRYPOINT ["bash","--login"]
+"""
+# fixme: that echo is broken.  The $(direnv hook bash) gets expanded.
+
+
+# This kind represents one "ecosystem".  Future may inculude UPS or FNALSPACK
+[eicspack]
+#parent_kind = ["debian_minimal", "alma_minimal"]
+parent_kind = "debian_minimal"
+image = '{parent[image]}-eicspack'
+label = '{parent[label]} eicspack'
+containerfile = """
+FROM {parent[image]}
+RUN git clone -c feature.manyFiles=true --depth=2 https://github.com/spack/spack.git
+RUN /spack/bin/spack compiler find
+RUN git clone https://github.com/BNLNPPS/eic-opticks.git /tmp/eic-opticks \
+    && \
+    cd /tmp/eic-opticks/ \
+    && \
+    git checkout spack \
+    && \
+    cp -a spack /spack/var/spack/repos/eic-opticks \
+    && \
+    cd - \
+    && \
+    rm -rf /tmp/eic-opticks
+RUN /spack/bin/spack repo add /spack/var/spack/repos/eic-opticks
+RUN bash -c 'echo . /spack/share/spack/setup-env.sh >> $HOME/.bashrc'
+ENTRYPOINT ["bash","--login"]
+"""
+[eicbuild]
+parent_kind = "eicspack"
+image = '{parent[image]}-eicbuild'
+containerfile = """
+from {parent[image]}
+RUN echo 'deb http://deb.debian.org/debian bookworm contrib non-free-firmware non-free' >> /etc/apt/sources.list \
+    && \
+    apt-get update
+RUN apt-get install -y nvidia-cuda-toolkit \
+    && \
+    apt-get clean
+RUN /spack/bin/spack install --only dependencies --fail-fast --no-cache --show-log-on-error -j 10 eic-opticks
+ENTRYPOINT ["bash","--login"]
+"""
+
+[eicopticks]
+parent_kind = "eicbuild"
+image = '{parent[image]}-eicopticks'
+containerfile = """
+from {parent[image]}
+RUN apt-get install -y gcc-11 g++-11 tree
+RUN /spack/bin/spack install --fail-fast --no-cache --show-log-on-error -j 10 eic-opticks
+ENTRYPOINT ["bash","--login"]
+"""
+
+
