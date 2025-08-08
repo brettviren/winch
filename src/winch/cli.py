@@ -241,6 +241,12 @@ def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force,
             fcont = fcont.format_map(SafeDict(node=inode, **idata))
             assure_file(fpath, fcont)
 
+        debug(f'{idata=}')
+        image_format = idata.get("image_format", None)
+        if image_format:
+            debug(f'using image format "{image_format}"') 
+            extra_args.append(f'--format={image_format}')
+
         build_image(image, cpath, *extra_args)
 
 
