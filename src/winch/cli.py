@@ -178,7 +178,7 @@ def cmd_list(ctx, inodes, template):
         string = template.format_map(SafeDict(ntype='I', node=inode, **data))
         print(string)
 
-
+    
 
 @cli.command("build")
 @selection()
@@ -300,6 +300,7 @@ def extract(image, output, path):
     Extract (cp) a path from an image to the host output path.
     '''
     image_copy(image, path, output)
+
 
 
 @cli.command("dot")

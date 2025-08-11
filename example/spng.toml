@@ -1,0 +1,247 @@
+# A winch config in support of the BNL/DUNE prompt-signal-processing SPNG work.
+
+[debian]
+#release = ['bookworm','trixie']
+release = ['bookworm']
+image = '{kind}:{release}'
+label = '{kind} {release}'
+
+[alma]
+release = ["9"]
+image = 'almalinux:{release}'
+label = '{kind} {release}'
+
+[alma_minimal]
+# Each image class has zero or more parents kinds.
+parent_kind = "alma"
+image = '{parent_kind}-{parent[release]}-minimal'
+label = '{parent[label]} minimal'
+# but will be given a single "parent" which is the data structure from the
+# single instance upon which a generated instance is built.
+containerfile = """
+FROM {parent[image]}
+"""
+
+[debian_minimal]
+parent_kind = "debian"
+image = '{parent_kind}-{parent[release]}-minimal'
+label = '{parent[label]} minimal'
+# The template will be formated with params of this node and the parent.
+containerfile = """
+FROM {parent[image]}
+RUN apt update \
+    && \
+    apt-get install -y \
+      build-essential ca-certificates coreutils curl gfortran git gpg clang autoconf \
+      lsb-release unzip zip direnv man-db emacs \
+      python-is-python3 python3 python3-distutils python3-venv python3-click python3-yaml \
+    && \
+    apt-get clean
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+ENTRYPOINT ["bash","--login"]
+"""
+
+
+[spack_base]
+#parent_kind = ["debian_minimal", "alma_minimal"]
+parent_kind = "debian_minimal"
+image = '{parent[image]}-spack-{version}'
+label = '{parent[label]} spack {version}'
+version = "v1.0.0"
+containerfile = """
+FROM {parent[image]}
+RUN git clone --branch {version} --depth=2 https://github.com/spack/spack.git
+RUN /spack/bin/spack compiler find
+ENTRYPOINT ["bash","--login"]
+"""
+
+
+[wct_spack]
+parent_kind = "spack_base"
+image = '{parent[image]}-wct_spack-{version}'
+label = '{parent[label]} WCT Spack {version}'
+version = "1.0.0"
+containerfile = """
+FROM {parent[image]}
+RUN git clone --branch {version} https://github.com/WireCell/wire-cell-spack.git /spack/var/spack/repos/wirecell
+RUN /spack/bin/spack repo add /spack/var/spack/repos/wirecell/spack_repo/wirecell
+RUN /spack/bin/spack info wire-cell-toolkit
+RUN /spack/bin/spack --version
+ENTRYPOINT ["bash","--login"]
+"""
+
+[install_wct]
+parent_kind = "wct_spack"
+image = '{parent[image]}-wct-{version}'
+label = '{parent[label]} WCT {version}'
+package = "wire-cell-toolkit"
+#version = ["master","porting","0.37.0"]
+version = "0.30.7"
+spec = "{package}@{version} +hdf +root +torch +cuda cuda_arch=89"
+containerfile = """
+FROM {parent[image]}
+RUN /spack/bin/spack install  --fail-fast --no-cache --show-log-on-error -j 10 {spec}
+
+# extra packages needed for WCT tests, not captured yet in wire-cell-spack
+RUN /spack/bin/spack install --fail-fast --no-cache --show-log-on-error -j 10 jq
+RUN /spack/bin/spack install --fail-fast --no-cache --show-log-on-error -j 10 graphviz+pangocairo
+ENTRYPOINT ["/bin/bash", "-c"]
+"""
+## Be careful changing this one as "forced" rerunning will lead repeating the
+## rather long spack install.
+
+
+# SPNG is on a branch of wire-cell-toolkit as of 2025-08-11.  It is not yet
+# included in official releases.  We could add specific hashes or make some
+# SPNG-specific tags and use Spack to build that.  For this kind, we instead
+# install a developer environment based on a view.
+[spng_dev]
+parent_kind = "install_wct"
+image = '{parent[image]}-spng-dev'
+label = '{parent[label]} spng dev'
+package = "wire-cell-toolkit"
+
+containerfile = """
+FROM {parent[image]}
+
+# The view
+RUN /spack/bin/spack view -e {package} add -i /winch/local {package}
+RUN for pkg in jq graphviz ; do /spack/bin/spack view add -i /winch/local $pkg; done
+
+# hook in the view
+ENV PREFIX /winch/local
+ENV PATH /winch/local/bin:/winch/toolkit/test/bats/bin:/bin:/usr/bin:/usr/local/bin
+ENV LD_LIBRARY_PATH /winch/local/lib
+ENV PKG_CONFIG_PATH /winch/local/share/pkgconfig:/winch/local/lib/pkgconfig:/winch/local/lib64/pkgconfig
+ENV WIRECELL_PATH /winch/toolkit/cfg:/winch/local/share/wirecell
+ENV BATS_LIB_PATH /winch/toolkit/test
+# warning: python version hard-wired
+ENV TORCH /winch/local/lib/python3.12/site-packages/torch
+
+# wire-cell-python
+RUN git clone --single-branch https://github.com/WireCell/wire-cell-python.git /winch/python
+WORKDIR /winch/python
+
+RUN which python
+RUN python --version
+RUN python -m pip install -r requirements/base.txt
+RUN python -m pip install -r requirements/sigproc.txt
+RUN python setup.py install
+RUN wcpy --help
+
+
+# wire-cell-toolkit
+RUN git clone --branch spng --single-branch https://github.com/WireCell/wire-cell-toolkit.git /winch/toolkit
+WORKDIR /winch/toolkit
+
+# move this up to "base"
+RUN apt-get update && apt-get install -y zlib1g-dev && apt-get clean
+
+
+RUN ls -la $TORCH/ $TORCH/lib
+RUN ./wcb configure --prefix=$PREFIX \
+    --boost-mt --boost-libs=$PREFIX/lib --boost-include=$PREFIX/include \
+    --with-jsonnet-libs=gojsonnet --with-jsonnet=$PREFIX \
+    --with-eigen-include=$PREFIX/include/eigen3 \
+    --with-libtorch-lib=$TORCH/lib \
+    --with-libtorch-include=$TORCH/include,$TORCH/include/torch/csrc/api/include \
+    --with-root=$PREFIX \
+    --with-zio=no --with-zmq=no --with-czmq=no --with-zyre=no \
+    || cat /winch/toolkit/build/config.log
+RUN ./wcb 
+RUN ./wcb install
+
+ENTRYPOINT ["/bin/bash", "-c"]
+"""
+
+
+# RUN apt-get update && apt-get install -y wget && apt-get clean
+# RUN wget -q https://github.com/astral-sh/uv/releases/download/0.8.8/uv-x86_64-unknown-linux-gnu.tar.gz \
+#     && tar xf uv-x86_64-unknown-linux-gnu.tar.gz \
+#     && cp uv-x86_64-unknown-linux-gnu/uv* /usr/local/bin
+# RUN uv tool install --with torch git+https://github.com/wirecell/wire-cell-python
+
+
+# COPY dot.envrc winch/.envrc
+# RUN cd /winch && direnv allow
+
+
+# files = { "dot.envrc" = """
+# load_prefix "$PWD/local"
+# layout python
+# export PREFIX="$PWD/local"
+# path_add PKG_CONFIG_PATH "$PREFIX/share/pkgconfig"
+# path_add PKG_CONFIG_PATH "$PREFIX/lib/pkgconfig"
+# path_add PKG_CONFIG_PATH "$PREFIX/lib64/pkgconfig"
+
+
+# ### Added by wcwc task wct-dev-view 
+# # cfg from source and data from view
+# path_add WIRECELL_PATH $PWD/toolkit/cfg
+# path_add WIRECELL_PATH $PWD/local/share/wirecell
+
+# # find wct-bats.sh library in source 
+# export BATS_LIB_PATH=$PWD/toolkit/test
+
+# PATH_add $PWD/toolkit/test/bats/bin
+
+
+# # Find python modules
+# export PYTHONPATH=$PWD/python
+# """}
+
+
+# [wctdev]
+# parent_kind = "spackview"
+# image = '{parent[image]}-wctdev-{gitref}'
+# label = '{parent[label]} WCT dev'
+# ## note: pushing fresh commits to a branch may require --force to rebuild the layer
+# #gitref = ["master","apply-pointcloud"]
+# # Note: 0.27.x will fail on recent SPDLOG 
+# gitref = ["master", "0.29.x", "0.28.x"]
+
+# containerfile = """
+# FROM {parent[image]}
+
+
+# RUN git clone https://github.com/WireCell/wire-cell-python.git /winch/python
+
+
+# WORKDIR /winch/python
+
+# RUN python --version
+# RUN python -m pip install -r requirements/base.txt
+# RUN python -m pip install -r requirements/sigproc.txt
+# RUN python setup.py install
+# RUN echo "PREFIX is $PREFIX"
+# RUN echo "PATH is $PATH"
+
+# RUN git clone --branch {gitref} --single-branch https://github.com/WireCell/wire-cell-toolkit.git /winch/toolkit
+
+# WORKDIR /winch/toolkit
+# ENV PYTHONPATH /winch/python
+# ENV LIBRARY_PATH /winch/local/lib
+
+# RUN ./wcb configure --prefix=$PREFIX --boost-mt --boost-libs=$PREFIX/lib --boost-include=$PREFIX/include --with-jsonnet-libs=gojsonnet --with-jsonnet=$PREFIX --with-root=$PREFIX || cat /winch/toolkit/build/config.log
+# RUN ./wcb 
+# RUN ./wcb install
+
+# # run wcdoctests explicitly to let their failures terminate the build
+# RUN for cmd in $(find ./build -regex '.*/wcdoctest-[a-z]*$') ; do $cmd; done
+
+# RUN cd /winch/toolkit && ./wcb --tests
+# """
+
+
+# [wctdevdr]
+# parent_kind = "wctdev"
+# image = '{parent[image]}-datarepo'
+
+# containerfile = """
+# FROM {parent[image]}
+# RUN ls -l /winch/toolkit/build/tests/history
+# RUN ls -l /winch/toolkit/build/tests/history/$(git describe --tags)
+# RUN cd /winch/toolkit && tar -C build/tests -cf history-$(git describe --tags).tar history/$(git describe --tags)
+# RUN tar -tvf /winch/toolkit/history-$(git describe --tags).tar
+# RUN ls -l /winch/toolkit/history-$(git describe --tags).tar
+# """

@@ -238,6 +238,15 @@ def which(exe):
     return runner
 
 
+def assure_dir(path):
+    '''
+    Make directory at path if no such path exists (directory or file).
+    '''
+    path = Path(path)
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+
+
 def assure_file(path, content=None):
     '''
     Assure file exists at path with content (if given).
