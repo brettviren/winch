@@ -116,7 +116,8 @@ def select_inodes(ctx, kpath=None, kind=None, deps=None, instances=None, none_is
     if instances == "all":
         return ctx.obj.graph.I.nodes
 
-    return to_nodes(instances.split(","))
+    print(f'{instances=}')
+    return to_nodes(ctx.obj.graph.I, instances.split(","))
 
 
 def selection(none_is_all=False):
@@ -200,6 +201,12 @@ def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force,
     Build container images from I-nodes.
 
     This will also build Containerfile file and context directory in output.
+
+    The --rebuild option allows podman to determine if a layer needs rebuilding
+    (eg due to a config.toml change) and does not necessarily lead to a rebuild.
+
+    The --force option will remove an image and thus cause a rebuild regardless
+    if one is needed or not.
     '''
     for inode in inodes:
         idata = ctx.obj.graph.data(inode)

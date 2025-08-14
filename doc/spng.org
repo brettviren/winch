@@ -1,0 +1,189 @@
+#+title: The SPNG Winch example
+
+SPNG is a new signal processing for Wire-Cell.  Until it is released we must
+build and use it in a developer environment based on the ~spng~ branch of
+~wire-cell-toolkit~.
+
+The ~spng.toml~ example provides a few ways to build the stack.
+
+- Debian (bookworm or trixie) + Spack
+- Debian (bookworm or trixie) + yet more Debian
+- Alma (8 or 9) + Spack (work in progress)
+  
+
+* Quick start
+
+This assumes [[https://github.com/astral-sh/uv/][uv]] to run/install winch (there are other ways).
+
+** Initial low-commitment test
+
+#+begin_example
+$ uv run --with git+https://github.com/brettviren/winch.git winch --help
+#+end_example
+
+** Install
+
+You can continue to ~uv run~ winch but to avoid the verbose command line, install winch as a "uv tool" 
+
+#+begin_example
+uv tool install git+https://github.com/brettviren/winch.git
+#+end_example
+
+** Configure
+
+Get the =spng.toml= example file and set an env var to avoid having to remember to
+provide the =-c/--config= option:
+#+begin_example
+$ wget https://raw.githubusercontent.com/brettviren/winch/refs/heads/master/example/spng.toml
+$ export WINCH_CONFIG spng.toml
+#+end_example
+
+You can now see what image instance names can be built:
+
+#+begin_example
+$ winch list
+debian:bookworm
+debian-bookworm-minimal
+debian-bookworm-minimal-spack-v1.0.0
+debian-bookworm-minimal-spack-v1.0.0-wct_spack-1.0.0
+debian-bookworm-minimal-spack-v1.0.0-wct_spack-1.0.0-wct-0.30.7
+debian-bookworm-minimal-spack-v1.0.0-wct_spack-1.0.0-wct-0.30.7-spng-dev
+...
+#+end_example
+Your output will differ as ~spng.toml~ is further developed
+
+** Build
+
+Example of building a full stack up to a specific instance:
+
+#+begin_example
+$ winch build -d <image-name-from-list>
+#+end_example
+
+* Using
+
+** One-shot command running
+
+Run a command in an ephemeral container:
+
+#+begin_example
+$ export SPNG_IMAGE=<image-name-from-list>  # just for abbreviation
+
+$ podman run --rm --device nvidia.com/gpu=all -it $SPNG_IMAGE wire-cell --help
+$ podman run --rm --device nvidia.com/gpu=all -it $SPNG_IMAGE nvidia-smi
+$ podman run --rm --device nvidia.com/gpu=all -it $SPNG_IMAGE  # interactive shell
+#+end_example
+
+** Persistent user environment
+
+Images ending in =-user= provide a final layer to help use the image as a base for
+a persistent user volume.  Here is a general recipe 
+
+#+begin_example
+$ podman volume create MY-DATA-VOLUME
+$ podman create --name MY-IMAGE-NAME --volume MY-DATA-VOLUME:/home/devuser --tz=local USER-IMAGE
+$ podman start MY-IMAGE-NAME
+$ podman exec -it MY-IMAGE-NAME <command-as-user>
+$ podman exec -it -u root MY-IMAGE-NAME <command-as-root>
+#+end_example
+
+Replace capitalized strings with your own values given:
+
+- =USER-IMAGE= :: The winch image ending in =-user=.
+- =MY-DATA-VOLUME= :: The name of an image created to hold your interactive modifications to the base.
+- =MY-IMAGE-NAME= :: The combined user and data images.
+
+This assumes the user in the container is =devuser=.  If you work on a system with SELinux, using ~/home/devuser:Z~ may be required.
+
+*** Worked example
+
+#+begin_example
+$ podman volume create bv-spng-data
+bv-spng-data
+
+$ podman create --name bv-spng-user --volume bv-spng-data:/home/devuser --tz=local localhost/debian-bookworm-minimal-spack-v1.0.1-wct_spack-1.0.0-wct-0.30.7-spng-dev-user
+0bc4071dc0f770d4ad24be582c6418fb3ad3c189795425cd26902613fe691298
+
+$ podman start bv-spng-user
+bv-spng-user
+
+$ podman exec -it bv-spng-user /usr/bin/fish
+Welcome to fish, the friendly interactive shell
+Type help for instructions on how to use fish
+devuser@0bc4071dc0f7 ~> echo Hello world > greeting.txt
+devuser@0bc4071dc0f7 ~> exit
+
+$ podman exec -it bv-spng-user cat greeting.txt
+Hello world
+#+end_example
+
+Note, currently there is no way to provide alternative values for =ARG= variables short of editing the =spng.toml= file.
+
+** SSH into the container
+
+The =-user= images use =openssh-server= as the placeholder that is run by =podman start <name>= in order to keep the container running.  You can make use of it to access the container via ~ssh~ instead of ~podman exec~ by first creating the container with the SSHd port mapped:
+
+#+begin_example
+$ podman create --name bv-spng-user --volume bv-spng-data:/home/devuser --tz=local -p 2222:22 localhost/debian-bookworm-minimal-spack-v1.0.1-wct_spack-1.0.0-wct-0.30.7-spng-dev-user
+
+$ podman start bv-spng-user
+
+$ podman exec -it bv-spng-user /usr/bin/fish
+#+end_example
+
+In that initial shell, create and fill the usual =~/.ssh/athorized_keys= file.  Then exit and
+
+#+begin_example
+$ ssh  -p 2222 devuser@localhost
+#+end_example
+
+Note, if you have problems, consider running this prior to the ~ssh~ command:
+
+#+begin_example
+$ podman logs -f bv-spng-user
+#+end_example
+
+
+* Exporting images
+
+To export an image to OCI format file run something like:
+
+#+begin_example
+$ podman save --format oci-archive \
+   -o debian12-spack101-wct0307-spngdev.tar \
+   localhost/debian-bookworm-minimal-spack-v1.0.1-wct_spack-1.0.0-wct-0.30.7-spng-dev
+#+end_example
+
+This example save takes about six minutes to complete, the image reports as
+42.7GB under ~podman images~ and the resulting tar file is 24GB.
+
+* notes
+
+Some reconnoitering to figure out what type of jobs to expose
+
+#+begin_example
+sudo apt-get install locales  # quell warnings from bash 
+uv tool install snakemake     # for various WCT workflows
+fish_add_path ~/.local/bin /winch/local/bin
+set -x -U WIRECELL_PATH /winch/local/share/wirecell:/winch/toolkit/cfg
+#+end_example
+
+Currently, the SSH environment does not inherit the ~ENV~ settings that are active
+when doing ~podman exec~.  The "user" layer could be improved to make some shell
+init files.  For now, user must do the needful.
+
+One example snakemake workflow:
+
+#+begin_example
+/winch/toolkit/test/scripts/spdir --config detector=pdsp --directory spdir all
+#+end_example
+
+To extract the files from the volume to the native host you can use ~scp~ or:
+
+#+begin_example
+podman cp 'bv-spng-user:/home/devuser/junk/spdir/' junk/
+#+end_example
+
+Or, you could back up and mount a native directory instead of or in addition to
+the volume and write directly to that.
+
