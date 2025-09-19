@@ -22,6 +22,13 @@ label = '{parent[label]} minimal'
 # single instance upon which a generated instance is built.
 containerfile = """
 FROM {parent[image]}
+RUN dnf update -y && dnf install -y "@Development Tools" \
+    ca-certificates gcc-gfortran git gnupg2 clang \
+    autoconf unzip zip man-db \
+    emacs wget \
+    python3 python3-setuptools python3-pip python3-devel \
+    zlib-devel && dnf clean -y all
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
 """
 
 
@@ -40,7 +47,7 @@ RUN apt-get update \
       build-essential ca-certificates coreutils curl gfortran git gpg clang autoconf \
       lsb-release unzip zip direnv man-db emacs wget \
       python-is-python3 python3 python3-setuptools python3-venv python3-click python3-yaml \
-      zlib1g-dev \
+      locales zlib1g-dev \
     && \
     apt-get clean
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
@@ -150,8 +157,8 @@ CMD ["/bin/bash"]
 
 # Build a base Spack on top of either Debian or Alma.
 [spack_base]
-#parent_kind = ["debian_minimal", "alma_minimal"]
-parent_kind = "debian_minimal"
+parent_kind = ["debian_minimal", "alma_minimal"]
+# parent_kind = "debian_minimal"
 image = '{parent[image]}-spack-{version}'
 label = '{parent[label]} spack {version}'
 version = "v1.0.1"
@@ -217,8 +224,6 @@ FROM {parent[image]}
 RUN /spack/bin/spack view -e {package} add -i /winch/local {package}
 RUN for pkg in jq graphviz ; do /spack/bin/spack view add -i /winch/local $pkg; done
 
-# fixme: move up to debian base before next full rebuild.
-RUN apt-get install locales  # quell warnings from bash 
 RUN uv pip install --system --break-system-packages snakemake
 
 # hook in the view
