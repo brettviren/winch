@@ -145,7 +145,6 @@ RUN cp build/*/wcdoctest-* /usr/bin
 
 RUN ./wcb distclean
 
-
 # clear any parent
 ENTRYPOINT []
 # default command
@@ -270,10 +269,12 @@ RUN ./wcb install
 # These executables are not for end users but may be useful for developer
 # container. We move them out of build/ so we can purge all of build conserve
 # storage space.
-RUN cp build/*/check_* /winch/local/bin
-RUN cp build/*/wcdoctest-* /winch/local/bin
+#RUN cp build/*/check_* /winch/local/bin
+#RUN cp build/*/wcdoctest-* /winch/local/bin
 
 RUN ./wcb distclean
+
+RUN wget https://huggingface.co/WireCell/dnn-roi/resolve/main/pdsp/ts-model-2.3/unet-l23-cosmic500-e50.ts
 
 # clear any parent
 ENTRYPOINT []
