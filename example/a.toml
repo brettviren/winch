@@ -1,0 +1,6 @@
+# a.toml
+[debian]
+release = ['bookworm']
+image = '{kind}:{release}'
+label = '{kind} {release}'
+extra_a = 'a'

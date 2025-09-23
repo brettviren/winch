@@ -1,0 +1,29 @@
+# This holds generic container fragments for ALMA linux.
+#
+# It is intended to be combined using winch's multi-config support.
+
+[alma]
+release = ["9"]
+image = 'almalinux:{release}'
+label = '{kind} {release}'
+
+# CAVEAT: this is just here to remind me to flesh out. It will need some care to
+# get the additional packages installed comensurate with debian_minimal.
+[alma_minimal]
+# Each image class has zero or more parents kinds.
+parent_kind = "alma"
+image = '{parent_kind}-{parent[release]}-minimal'
+label = '{parent[label]} minimal'
+# but will be given a single "parent" which is the data structure from the
+# single instance upon which a generated instance is built.
+containerfile = """
+FROM {parent[image]}
+RUN dnf update -y && dnf install -y "@Development Tools" \
+    ca-certificates gcc-gfortran git gnupg2 clang \
+    autoconf unzip zip man-db \
+    emacs wget \
+    python3 python3-setuptools python3-pip python3-devel \
+    zlib-devel && dnf clean -y all
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+"""
+

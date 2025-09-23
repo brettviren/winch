@@ -1,0 +1,6 @@
+# b.toml
+[debian]
+release = ['trixie']
+image = '{kind}:{release}'
+label = '{kind} {release} is awesome'
+extra_b = 'b'

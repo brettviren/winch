@@ -7,7 +7,7 @@ Command line interface to winch.
 import click
 
 from .util import setup_logging, debug, warn, error, self_format, assure_file, SafeDict, looks_like_digest
-from .config import load as load_config
+from .config import load_many as load_configs
 from .viz import write_dot
 from .graph import Graph
 from .podman import build_image, image_exists, remove_image, image_copy
@@ -24,6 +24,7 @@ class Main:
         if config is None:
             return
         self.opts = config.pop("winch",{})
+        self.config = config
         self._graph = Graph(**config)
 
     @property
@@ -35,7 +36,8 @@ class Main:
 
 cmddef = dict(context_settings = dict(auto_envvar_prefix='WINCH',
                                       help_option_names=['-h', '--help']))
-@click.option("-c", "--config", default=None, type=str,
+@click.option("-c", "--config", "config",
+              multiple=True,
               help="Specify a config file")
 @click.option("-l","--log-output", multiple=True,
               help="log to a file [default:stdout]")
@@ -49,9 +51,10 @@ def cli(ctx, config, log_output, log_level):
     '''
     setup_logging(log_output, log_level)
     try:
-        cfg = load_config(config)
+        cfg = load_configs(*config)
     except FileNotFoundError:
         cfg = None
+
     ctx.obj = Main(cfg)
     return
 
@@ -149,6 +152,12 @@ def selection(none_is_all=False):
     return decorator
 
 
+@cli.command("dump-config")
+@click.pass_context
+def cmd_config(ctx):
+    import json
+    print(json.dumps(ctx.obj.config))
+
 @cli.command("list")
 @selection(none_is_all=True)
 @click.option("-t","--template", default="{image}",
@@ -181,7 +190,10 @@ def cmd_list(ctx, inodes, template):
 
     
 
-@cli.command("build")
+@cli.command("build", context_settings=dict(
+    ignore_unknown_options=True,
+    allow_extra_args=True # This is also useful for accepting arguments after known options
+))
 @selection()
 @click.option("--containerfile-attribute", default="containerfile",
               help="Name the attribute providing the Containerfile content")
@@ -195,8 +207,9 @@ def cmd_list(ctx, inodes, template):
               help="Force a rebuild by removing existing image that maps the selector")              
 @click.option("-o","--outpath", default='winch-contexts/{image}/Containerfile',
               help='A file path name for output files, may include "{format}" markup')
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
 @click.pass_context
-def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force, outpath):
+def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force, outpath, args):
     '''
     Build container images from I-nodes.
 
@@ -254,6 +267,7 @@ def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force,
             debug(f'using image format "{image_format}"') 
             extra_args.append(f'--format={image_format}')
 
+        extra_args += args
         build_image(image, cpath, *extra_args)
 
 

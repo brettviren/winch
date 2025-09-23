@@ -1,0 +1,66 @@
+#+title: winch multi-file configuration support
+
+* Overview
+
+You may factor your ~winch~ configurations into multiple configuration files.
+This assists in more properly sharing the same base images across disparate
+branches of a larger tree of layers.
+
+Factoring into files helps with the problem that copy-pasting almost-the-same
+content can lead to name collisions or just chaos.
+
+To use multiple configuration file one simply provides them as comma-separated
+lists or with multiple ~-c|--config~ options.
+
+#+begin_example
+$ export WINCH_CONFIG=example/alma.toml,example/cvmfs.toml
+$ winch [...]
+#+end_example
+Or
+#+begin_example
+$ winch -c example/alma.toml,example/cvmfs.toml list
+#+end_example
+Or
+#+begin_example
+$ winch -c example/alma.toml -c example/cvmfs.toml list
+#+end_example
+
+* How ~winch~ combines configurations 
+
+~winch~ will load each TOML file and apply a recursive merge to their data
+structures in the order the configuration files are presented.
+
+
+#+include: ../example/a.toml src toml
+#+include: ../example/b.toml src toml
+
+Running:
+
+#+begin_example
+$ winch -c example/a.toml,example/b.toml dump-config | json_pp
+{
+   "debian" : {
+      "extra_a" : "a",
+      "extra_b" : "b",
+      "image" : "{kind}:{release}",
+      "label" : "{kind} {release} is awesome",
+      "release" : [
+         "bookworm",
+         "trixie"
+      ]
+   }
+}
+#+end_example
+
+Note, the two ~debian~ objects and the ~release~ list was combined and the ~label~ was overridden and the ~extra_*~ from each were kept.
+
+* Usage cautions
+
+When factoring ~winch~ config into multiple configuration files, just take care
+that changing one file will effect all combinations of configuration files that
+rely on it.
+
+* Future work
+
+For now, it is up to the command line to compose configuration files.  An
+"include" mechanism is foreseen for future development of winch.

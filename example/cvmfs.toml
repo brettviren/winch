@@ -1,0 +1,29 @@
+# This is a winch config to test out having /cvmfs mounted during image build time.
+#
+#
+# Your must call "winch build" with appended options to tell podman to do the mount.
+#
+# Eg:
+#
+# $ winch -c example/alma.toml -c example/cvmfs.toml build \
+#         -d alma-9-minimal-cvmfs -- -v /cvmfs:/cvmfs
+#
+# You must also mount when the container is run:
+#
+# $ podman run -v /cvmfs:/cvmfs -it --rm alma-9-minimal
+
+
+
+[alma_cvmfs]
+parent_kind = "alma_minimal"
+image = '{parent[image]}-cvmfs'
+label = '{parent[label]} CVMFS'
+containerfile = """
+FROM {parent[image]}
+
+RUN ls -l /cvmfs/larsoft.opensciencegrid.org/
+
+# default command
+CMD ["/bin/bash"]
+"""
+

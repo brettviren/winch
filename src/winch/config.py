@@ -34,3 +34,54 @@ def load(path=None):
     raise FileNotFoundError(f'no configuration file found: {path}')
 
 
+def merge(a, b):
+    """
+    Recursively merge to same-type things.
+
+    Types must follow JSON data model.
+
+    - lists are appended
+    - scalars, b wins
+    - objects are merged, b wins on key conflict.
+    """
+    if type(a) != type(b):
+        raise ValueError(f'type mismatch {type(a)} != {type(b)}')
+
+    if isinstance(a, list):
+        return a+b
+
+    if isinstance(a, (str, int, float)):
+        return b;
+
+    if isinstance(a, dict):
+        a = dict(a)
+        for key, value in b.items():
+            if key in a:
+                a[key] = merge(a[key], value);
+                continue
+            a[key] = value;
+        return a
+
+    raise TypeError(f'unsupported merge type: {type(a)}')
+
+
+def load_many(*paths):
+    '''
+    Load one or more paths where each may be a comma-separated list of paths.
+    '''
+
+    my_paths=list()
+    for path in paths:
+        if "," in path:
+            my_paths += path.split(",")
+        else:
+            my_paths.append(path)
+
+    if not my_paths:
+        my_paths = [None]       # will load single default
+
+    cfg = load(my_paths.pop(0))
+    for path in my_paths:
+        new = load(my_paths.pop(0))
+        cfg = merge(cfg, new)
+    return cfg

@@ -1,0 +1,18 @@
+#+title: Using winch with GitHub Container Registry
+
+* Low level using with podman
+
+Generate a Personal Access Token (PAT) with ~write:packages~ and ~read:packages~
+scopes.  GitHub calls "images" as "packages".
+
+#+begin_example
+$ podman login ghcr.io -u YOUR_GITHUB_USERNAME -p YOUR_PERSONAL_ACCESS_TOKEN
+$ podman build -t ghcr.io/YOUR_GITHUB_USERNAME/YOUR_REPOSITORY_NAME/YOUR_IMAGE_NAME:TAG .
+$ podman push ghcr.io/YOUR_GITHUB_USERNAME/YOUR_REPOSITORY_NAME/YOUR_IMAGE_NAME:TAG
+$ podman pull ghcr.io/YOUR_GITHUB_USERNAME/YOUR_REPOSITORY_NAME/YOUR_IMAGE_NAME:TAG
+$ podman run ghcr.io/YOUR_GITHUB_USERNAME/YOUR_REPOSITORY_NAME/YOUR_IMAGE_NAME:TAG
+#+end_example
+
+By default, a published image is private and its [[https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility][public visibility must be set]].
+
+A published image [[https://docs.github.com/en/packages/learn-github-packages/connecting-a-repository-to-a-package][can be linked to a repo]].

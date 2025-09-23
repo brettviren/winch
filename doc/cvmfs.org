@@ -1,0 +1,40 @@
+#+title: winch cvmfs example
+
+* Overview
+
+The ~cvmfs.toml~ configuration file for ~winch~ provides and example of the ~/cvmfs~
+mount can be accessed at build-time.
+
+The basics are really very simple:
+#+begin_example
+$ winch -c example/alma.toml -c example/cvmfs.toml build \
+        -d alma-9-minimal-cvmfs -- -v /cvmfs:/cvmfs
+...
+STEP 2/3: RUN ls -l /cvmfs/larsoft.opensciencegrid.org/
+total 24
+-rw-r--r--   1 nobody nobody   57 Mar 14  2022 new_repository
+drwxr-xr-x  13 nobody nobody  109 Mar 14  2022 packages
+drwxr-xr-x 198 nobody nobody 4096 Feb  7  2024 products
+-rw-r--r--   1 nobody nobody  151 Mar 14  2022 setup_larsoft.sh
+drwxr-xr-x   3 nobody nobody 4096 May  8 20:04 spack-fnal-develop
+drwxr-xr-x  11 nobody nobody 4096 Jul 24 16:51 spack-fnal-v1.0.0
+drwxr-xr-x  10 nobody nobody 4096 Feb 14  2024 spack-packages
+drwxr-xr-x  13 nobody nobody 4096 Jun  4 21:49 spack-v0.22.0-fermi
+...
+#+end_example
+Note, this example makes use of winch's [[file:multiconfig.org][multi-config file support]].
+
+You must also mount ~/cvmfs~ when the container is run:
+#+begin_example
+$ podman run -v /cvmfs:/cvmfs -it --rm alma-9-minimal ls -l /cvmfs/larsoft.opensciencegrid.org/
+total 24
+-rw-r--r--   1 nobody nobody   57 Mar 14  2022 new_repository
+drwxr-xr-x  13 nobody nobody  109 Mar 14  2022 packages
+drwxr-xr-x 198 nobody nobody 4096 Feb  7  2024 products
+-rw-r--r--   1 nobody nobody  151 Mar 14  2022 setup_larsoft.sh
+drwxr-xr-x   3 nobody nobody 4096 May  8 20:04 spack-fnal-develop
+drwxr-xr-x  11 nobody nobody 4096 Jul 24 16:51 spack-fnal-v1.0.0
+drwxr-xr-x  10 nobody nobody 4096 Feb 14  2024 spack-packages
+drwxr-xr-x  13 nobody nobody 4096 Jun  4 21:49 spack-v0.22.0-fermi
+#+end_example
+

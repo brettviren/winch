@@ -317,8 +317,8 @@ Push:
 #+begin_example
 $ podman push ghcr.io/brettviren/wct-spng-0:v1
 #+end_example
-This command takes 17m and failed with 504 gateway timeout error.  Simply repushing gets it done.
-Replace ~push~ with ~pull~ to get this image on to your podman.
+This command takes 17m and failed with 504 gateway timeout error, twice.  Repeating will repush blob ~7687cbf4ab82~ (31.3GiB).
+
 
 To make the image generally available, visit "Packages" from your GitHub
 profile, click on containers and adjust.
