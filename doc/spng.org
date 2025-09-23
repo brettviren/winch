@@ -10,7 +10,6 @@ The ~spng.toml~ example provides a few ways to build the stack.
 - Debian (bookworm or trixie) + yet more Debian
 - Alma (8 or 9) + Spack (work in progress)
   
-
 * Quick start
 
 This assumes [[https://github.com/astral-sh/uv/][uv]] to run/install winch (there are other ways).
@@ -186,4 +185,147 @@ podman cp 'bv-spng-user:/home/devuser/junk/spdir/' junk/
 
 Or, you could back up and mount a native directory instead of or in addition to
 the volume and write directly to that.
+
+* Campaign 0
+
+Some notes specific for the "campaign 0" image.
+
+** Developer running
+
+A script is provided to bring some symmetry between the different modes of
+running.  Note, it adds the directory holding the script to ~WIRECELL_PATH~ and
+also uses ~WIRECELL_PATH~ to resolve config, model and input files.  This is
+custom behavior.
+
+#+begin_example
+$ ./spng/test/campaign0  # prints help
+
+$ device=gpu tech=spng \
+  ./spng/test/campaign0 \
+  -t $tech
+  -d $device  \
+  -i tensor_frames_noise_1anode.npz \
+  -o out/$tech/$device/junk-%s.npz \
+  -m unet-l23-cosmic500-e50.ts \
+  -c wct-framesource_1anode_dnnroi.jsonnet
+#+end_example
+
+** Podman image
+
+The image is built with ~winch~ using the ~spng.toml~ example that it provides.
+
+#+begin_example
+$ winch list | grep campaign0
+# shortcut for later commands
+$ export IMAGE=debian-bookworm-minimal-spack-v1.0.1-wct_spack-1.0.0-wct-0.30.7-campaign0
+$ winch build -d $IMAGE
+#+end_example
+
+The following issues must be handled to run ~campaign0~ inside the podman container:
+
+- Mount a host directories for input or output not already in the container.
+- Tell docker about GPU, if using .
+
+#+begin_example
+$  ls /nfs/data/1/bviren/newsp/toolkit/run
+tensor_frames_noise_1anode.npz
+
+$ podman run -it --rm \
+  -v /nfs/data/1/bviren/newsp/toolkit/run:/data \
+  debian-bookworm-minimal-spack-v1.0.1-wct_spack-1.0.0-wct-0.30.7-campaign0 \
+    /winch/toolkit/spng/test/campaign0 \
+     -t spng -o cpu \
+     -i /data/tensor_frames_noise_1anode.npz \
+     -o /data/out/spng/cpu/signals-%s.npz \
+     -c wct-framesource_1anode_dnnroi.jsonnet \
+     -m unet-l23-cosmic500-e50.ts
+
+$ ls /nfs/data/1/bviren/newsp/toolkit/run/out/spng/cpu/
+err  log  out  signals-u.npz  signals-v.npz  signals-w1.npz  signals-w2.npz
+#+end_example
+  
+A few things to note:
+
+- Mounts ~/nfs/data/1/bviren/newsp/toolkit/run~ to ~/data~.
+  - It already holds the input file.
+  - It will receive the output file(s).
+- Must give full path to ~campaign0~ script.
+- The directory ~/data~ is referenced for all input and output data paths.
+- The config and DNNROI model are provided by the container and auto-located.
+- Add podman argument ~--device nvidia.com/gpu=all~ so it will find GPUs.
+
+
+Of course, you can use different volume mounts for output as input and you can
+use different config and DNNROI model files.
+
+** OCI image
+
+This format is apparently best for CVMFS but I don't know what to do with it.
+
+#+begin_example
+$ podman save --format oci-archive \
+    -o oci-wct-spng-0.tar \
+    debian-bookworm-minimal-spack-v1.0.1-wct_spack-1.0.0-wct-0.30.7-campaign0 
+#+end_example
+
+This command takes 5m43s and produces a file of about 24 GB.
+
+** Apptainer image
+
+Apptainer apparently wants the default ~podman save~ format, which is docker's..
+
+#+begin_example
+$ podman save \
+    debian-bookworm-minimal-spack-v1.0.1-wct_spack-1.0.0-wct-0.30.7-campaign0 
+#+end_example
+This command takes 4m33s and produces a file of about 41 GB.
+Then, this image can be converted to apptainer format.
+
+#+begin_example
+$ apptainer build wct-spng-0.sif docker-archive:wct-spng-0.tar 
+#+end_example
+This command takes 16m2s and produces a file of about 11GB.
+
+Example running ~campaign0~ in apptainer:
+
+#+begin_example
+$ apptainer run wct-spng-0.sif \
+  /winch/toolkit/spng/test/campaign0 \
+  -t spng -o gpu \
+           -i /data/tensor_frames_noise_1anode.npz \
+           -o /data/out/spng/gpu/signals-%s.npz \
+           -c wct-framesource_1anode_dnnroi.jsonnet \
+           -m unet-l23-cosmic500-e50.ts
+#+end_example
+
+
+** GitHub container registry
+
+This requires a GitHub "personal access token (classic)".  See "developer
+settings" at the bottom of your GitHub settings page to generate one.
+
+#+begin_example
+$ podman login ghcr.io
+#+end_example
+
+Tag the local image
+
+#+begin_example
+$ podman tag debian-bookworm-minimal-spack-v1.0.1-wct_spack-1.0.0-wct-0.30.7-campaign0 ghcr.io/brettviren/wct-spng-0:v1
+#+end_example
+Push:
+#+begin_example
+$ podman push ghcr.io/brettviren/wct-spng-0:v1
+#+end_example
+This command takes 17m and failed with 504 gateway timeout error.  Simply repushing gets it done.
+Replace ~push~ with ~pull~ to get this image on to your podman.
+
+To make the image generally available, visit "Packages" from your GitHub
+profile, click on containers and adjust.
+
+** Getting container images
+
+- OCI and apptainer may be found here: https://www.phy.bnl.gov/~bviren/wire-cell/spng/
+
+- For GHCR, see here: 
 

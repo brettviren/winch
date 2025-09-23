@@ -250,15 +250,22 @@ RUN python setup.py install
 RUN wcpy --help
 
 
-# wire-cell-toolkit
-RUN git clone --branch spng --single-branch https://github.com/WireCell/wire-cell-toolkit.git /winch/toolkit
+# wire-cell-toolkit.
+# 
+# WARNING: rerunning an image build after the spng branch gets new commits will
+# tend to NOT rerun this line.
+RUN git clone --branch spng --single-branch \
+    https://github.com/WireCell/wire-cell-toolkit.git /winch/toolkit
+
 WORKDIR /winch/toolkit
 
 
+# fixme: must we hard-code the subpath to Spack's cuda?  It will break on different arch/os.
 RUN ./wcb configure --prefix=$PREFIX \
     --boost-mt --boost-libs=$PREFIX/lib --boost-include=$PREFIX/include \
     --with-jsonnet-libs=gojsonnet --with-jsonnet=$PREFIX \
     --with-eigen-include=$PREFIX/include/eigen3 \
+    --with-cuda=$PREFIX/targets/x86_64-linux \
     --with-libtorch-lib=$(cat /winch/torch-basedir)/lib \
     --with-libtorch-include=$(cat /winch/torch-basedir)/include,$(cat /winch/torch-basedir)/include/torch/csrc/api/include \
     --with-root=no --with-zio=no --with-zmq=no --with-czmq=no --with-zyre=no \
@@ -266,21 +273,100 @@ RUN ./wcb configure --prefix=$PREFIX \
 RUN ./wcb 
 RUN ./wcb install
 
-# These executables are not for end users but may be useful for developer
-# container. We move them out of build/ so we can purge all of build conserve
-# storage space.
-#RUN cp build/*/check_* /winch/local/bin
-#RUN cp build/*/wcdoctest-* /winch/local/bin
-
 RUN ./wcb distclean
-
-RUN wget https://huggingface.co/WireCell/dnn-roi/resolve/main/pdsp/ts-model-2.3/unet-l23-cosmic500-e50.ts
 
 # clear any parent
 ENTRYPOINT []
 # default command
 CMD ["/bin/bash"]
 """
+
+
+## Fine tuning for spng "campaign 0" image.  This is like spng_spackdev.
+[campaign0]
+parent_kind = "install_wct"
+image = '{parent[image]}-campaign0'
+label = '{parent[label]} campaign 0'
+package = "wire-cell-toolkit"
+
+containerfile = """
+FROM {parent[image]}
+
+# The view
+RUN /spack/bin/spack view -e {package} add -i /winch/local {package}
+RUN for pkg in jq graphviz ; do /spack/bin/spack view add -i /winch/local $pkg; done
+
+RUN uv pip install --system --break-system-packages snakemake
+
+# hook in the view
+ENV PREFIX /winch/local
+ENV PATH /winch/local/bin:/winch/toolkit/test/bats/bin:/bin:/usr/bin:/usr/local/bin:/root/.local/bin
+ENV LD_LIBRARY_PATH /winch/local/lib
+ENV PKG_CONFIG_PATH /winch/local/share/pkgconfig:/winch/local/lib/pkgconfig:/winch/local/lib64/pkgconfig
+ENV WIRECELL_PATH /winch/toolkit/cfg:/winch/local/share/wirecell
+ENV BATS_LIB_PATH /winch/toolkit/test
+# warning: python version hard-wired
+
+## Store Torch base install directory.  This has the Python version encoded so
+## we can not easily hard-wire it as an ENV.
+RUN python -c 'import torch; print(torch.__path__[0]);' > /winch/torch-basedir
+
+# wire-cell-python
+RUN git clone --single-branch https://github.com/WireCell/wire-cell-python.git /winch/python
+WORKDIR /winch/python
+
+RUN which python
+RUN python --version
+RUN python -m pip install -r requirements/base.txt
+RUN python -m pip install -r requirements/sigproc.txt
+RUN python setup.py install
+RUN wcpy --help
+
+
+# wire-cell-toolkit 
+#
+# This command does clone+checkout in one line with specific commit hash
+# to assure winch rebuilds the image when the hash changes.  Eventually,
+# replace hash with a tag.
+#
+# To get a hash, eg visit:
+# https://github.com/WireCell/wire-cell-toolkit/tree/spng
+RUN git clone --branch spng --single-branch \
+    https://github.com/WireCell/wire-cell-toolkit.git /winch/toolkit && \
+    cd /winch/toolkit && \
+    git reset --hard ac442f8f500c470abd3fe0d45aae475658528555
+
+WORKDIR /winch/toolkit
+
+RUN ./wcb configure --prefix=$PREFIX \
+    --boost-mt --boost-libs=$PREFIX/lib --boost-include=$PREFIX/include \
+    --with-jsonnet-libs=gojsonnet --with-jsonnet=$PREFIX \
+    --with-eigen-include=$PREFIX/include/eigen3 \
+    --with-cuda=$PREFIX/targets/x86_64-linux \
+    --with-libtorch-lib=$(cat /winch/torch-basedir)/lib \
+    --with-libtorch-include=$(cat /winch/torch-basedir)/include,$(cat /winch/torch-basedir)/include/torch/csrc/api/include \
+    --with-root=no --with-zio=no --with-zmq=no --with-czmq=no --with-zyre=no \
+    || cat /winch/toolkit/build/config.log
+RUN ./wcb 
+RUN ./wcb install
+
+RUN ./wcb distclean
+
+RUN wget --quiet -O /winch/local/share/wirecell/unet-l23-cosmic500-e50.ts \
+ https://huggingface.co/WireCell/dnn-roi/resolve/main/pdsp/ts-model-2.3/unet-l23-cosmic500-e50.ts
+
+## You may wish to mount a data volume to /data and campaign0 will then find input files relative to that mount.
+ENV WIRECELL_PATH /winch/toolkit/cfg:/winch/local/share/wirecell:/data
+
+# clear any parent
+ENTRYPOINT []
+# default command
+CMD ["/bin/bash"]
+
+"""
+
+
+
 
 # Add a final user layer to assist in setting up a non-root environment, while
 # still preserving the ability to run as root.  User suggested to create a
