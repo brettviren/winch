@@ -1,0 +1,96 @@
+# This is a winch config to build the lblpwgtools package, fds_dev branch.
+
+[debian]
+release = ['trixie']
+image = '{kind}:{release}'
+label = '{kind} {release}'
+
+# A Debian base for two subsequent layer branches.  One providing WCT
+# dependencies with Spack and the other with more Debian + uv.
+[debian_minimal]
+parent_kind = "debian"
+image = '{parent_kind}-{parent[release]}-minimal'
+label = '{parent[label]} minimal'
+# The template will be formated with params of this node and the parent.
+containerfile = """
+FROM {parent[image]}
+RUN apt-get update \
+    && \
+    apt-get install -y \
+      build-essential ca-certificates coreutils curl gfortran git gpg clang autoconf \
+      lsb-release unzip zip direnv man-db emacs wget \
+      llvm \
+      python-is-python3 python3 python3-setuptools python3-venv python3-click python3-yaml \
+      locales zlib1g-dev \
+    && \
+    apt-get clean
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+"""
+
+
+# Build a base Spack on top of either Debian or Alma.
+[spack_base]
+#parent_kind = ["debian_minimal", "alma_minimal"]
+parent_kind = "debian_minimal"
+image = '{parent[image]}-spack-{version}'
+label = '{parent[label]} spack {version}'
+version = "v1.0.2"
+containerfile = """
+FROM {parent[image]}
+RUN git clone --branch {version} --depth=2 https://github.com/spack/spack.git
+RUN wget -q https://github.com/mikefarah/yq/releases/download/v4.48.1/yq_linux_amd64.tar.gz -O - | tar xz && mv yq_linux_amd64 /usr/local/bin/yq
+RUN /spack/bin/spack compiler find
+RUN yq e '.packages.all.target = ["x86_64"]' -i ~/.spack/packages.yaml
+"""
+
+# Need to add to ~/.spack/packages.yaml:
+# packages:
+#       all:
+#         target: x86_64
+
+
+# Build the required packages.
+[cafana_deps]
+parent_kind = "spack_base"
+image = '{parent[image]}-cafana-deps'
+label = '{parent[label]} cafana deps'
+spack_install = "/spack/bin/spack install --fail-fast --no-cache --show-log-on-error -j 10"
+cxx_spec = "cxxstd=14 target=x86_64"
+containerfile = """
+FROM {parent[image]}
+RUN {spack_install} gsl target=x86_64
+RUN {spack_install} boost+filesystem+serialization {cxx_spec}
+RUN {spack_install} clhep {cxx_spec}
+RUN {spack_install} root+minuit {cxx_spec}
+
+RUN mkdir /winch
+RUN /spack/bin/spack view add -i /winch/local gsl boost clhep root
+"""
+
+[cafana_build]
+parent_kind = "cafana_deps"
+image = '{parent[image]}-build'
+label = '{parent[label]} biuld'
+cxx_spec = "cxxstd=14 target=x86_64"
+containerfile = """
+FROM {parent[image]}
+
+RUN echo redo 3
+RUN git clone --branch fds_dev https://github.com/BNLIF/lblpwgtools.git /winch/source
+RUN mkdir /winch/build
+WORKDIR /winch/build
+RUN cp -r /winch/source/CAFAna/Ext .
+ENV PATH /winch/local/bin:/usr/bin:/bin:/usr/local/bin
+ENV ROOTSYS /winch/local
+RUN cmake /winch/source/CAFAna \
+    -DSRC_ROOT_PARENT=/winch/source \
+    -DCMAKE_CXX_STANDARD=14 \
+    -DCMAKE_BUILD_TYPE=RELEASE \
+    -DUSED_UPS=0 -DUSE_GPERFTOOLS=0 -DKNL=0 \
+    -DUSE_OPENMP=0 \
+    -DBOOST_INC=/winch/local/include \
+    -DBOOST_LIB=/winch/local/lib \
+    -DCMAKE_INSTALL_PREFIX=/winch/local
+RUN make -j 32
+
+"""

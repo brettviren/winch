@@ -1,0 +1,63 @@
+#+title:  Building CAFAna from lblpwgtools branch =fds_dev=
+
+* Preliminaries
+
+We were directed to use this branch.
+
+https://github.com/DUNE/lblpwgtools/tree/fds_dev
+
+- Last commit 2023-07-25.
+- The "fds_dev" branch diverged from "master" on 2019-12-03.
+  - The "master" branch is active up to today.
+  - The "master" branch lacks any Dockerfile
+- The "fds_dev" branch has a Dockerfile
+  - Last built against Debian stretch - super old, no longer supported.
+
+It looks hopeless to use that Dockerfile so move use winch and modernity.
+
+[[file:../example/lblpwgtools-fds-dev.toml]]
+
+Will use these as guidance:
+- https://github.com/DUNE/lblpwgtools/blob/fds_dev/CAFAna/Dockerfile
+- https://github.com/DUNE/lblpwgtools/blob/fds_dev/CAFAna/standalone_configure_and_build.sh
+
+* Build
+
+Note, shell here is fish.
+
+#+begin_example
+$ set -x WINCH_CONFIG (pwd)/example/lblpwgtools-fds-dev.toml
+$ winch list
+$ winch build -d debian-trixie-minimal-spack-v1.0.2
+#+end_example
+
+That is the basic OS + Spack.  Next need to figure dependencies and their variants.  From the OG Dockerfile we need:
+
+- GSL :: Debian's package
+- BOOST :: Debian's package, filesystem lib.
+- CLHEP :: C++14, no special build options
+- ROOT :: C++14, minuit2 and "minimal".
+
+
+See what Spack variants exist
+
+#+begin_example
+for pkg in gsl boost clhep root
+    podman run -it --rm debian-trixie-minimal-spack-v1.0.2 /spack/bin/spack info $pkg
+end
+#+end_example
+
+Default version with Spack 1.0.2
+
+- GSL :: 2.8, default variants look okay
+- BOOST :: 1.88.0, need at least *filesystem*, grepping code also need *serialization*
+- CLHEP :: 2.4.7.1, default variants look okay
+- ROOT :: 6.36.00, minuit is default in spack, no libs listed =cmake/ROOTSetup.cmake= match spack variants.
+
+* Apptainer
+
+#+begin_example
+$ podman save -o lblwgtools-cafana-0.tar \
+   localhost/debian-trixie-minimal-spack-v1.0.2-cafana-deps-build
+$ apptainer build lblwgtools-cafana-0.sif docker-archive://lblwgtools-cafana-0.tar
+#+end_example
