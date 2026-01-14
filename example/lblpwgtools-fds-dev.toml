@@ -68,7 +68,7 @@ RUN /spack/bin/spack view add -i /winch/local gsl boost clhep root
 """
 
 [cafana_build]
-parent_kind = "cafana_deps"
+xparent_kind = "cafana_deps"
 image = '{parent[image]}-build'
 label = '{parent[label]} biuld'
 cxx_spec = "cxxstd=14 target=x86_64"

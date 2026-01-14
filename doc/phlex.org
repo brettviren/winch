@@ -1,0 +1,7 @@
+#+title: A winch for phlex
+
+#+begin_example
+$ set -x WINCH_CONFIG (pwd)/example/phlex.toml
+$ uv run winch list -t '{image:30s} {label}'
+#+end_example
+

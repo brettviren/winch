@@ -1,0 +1,90 @@
+# A winch config to build phlex stack
+
+[debian]
+#release = ['bookworm','trixie']
+release = ['bookworm', 'trixie']
+image = '{kind}:{release}'
+label = '{kind} {release}'
+
+[alma]
+release = ["9"]
+image = 'almalinux:{release}'
+label = '{kind} {release}'
+
+[alma_base]
+# Each image class has zero or more parents kinds.
+parent_kind = "alma"
+image = '{parent[kind]}-{parent[release]}'
+label = '{parent[label]} base'
+# but will be given a single "parent" which is the data structure from the
+# single instance upon which a generated instance is built.
+containerfile = """
+FROM {parent[image]}
+RUN dnf update -y && dnf install -y "@Development Tools" \
+    ca-certificates gcc-gfortran git gnupg2 clang \
+    autoconf unzip zip man-db \
+    emacs wget \
+    python3 python3-setuptools python3-pip python3-devel \
+    zlib-devel && dnf clean -y all
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+"""
+
+
+# A Debian base for two subsequent layer branches.  One providing WCT
+# dependencies with Spack and the other with more Debian + uv.
+[debian_base]
+parent_kind = "debian"
+image = '{parent[kind]}-{parent[release]}'
+label = '{parent[label]} base'
+# The template will be formated with params of this node and the parent.
+containerfile = """
+FROM {parent[image]}
+RUN apt-get update \
+    && \
+    apt-get install -y \
+      build-essential ca-certificates coreutils curl gfortran git gpg clang autoconf \
+      lsb-release unzip zip direnv man-db emacs wget \
+      python-is-python3 python3 python3-setuptools python3-venv python3-click python3-yaml \
+      locales zlib1g-dev llvm \
+    && \
+    apt-get clean
+"""
+
+# https://github.com/Framework-R-D/phlex/blob/main/INSTALLATION.md
+[spack_base]
+parent_kind = ["debian_base", "alma_base"]
+# parent_kind = "debian_minimal"
+image = '{parent[image]}-spack-{version}'
+label = '{parent[label]} spack {version}'
+version = "v1.1.0"
+containerfile = """
+FROM {parent[image]}
+RUN git clone --branch {version} --depth=2 https://github.com/spack/spack.git
+RUN /spack/bin/spack config add 'packages:all:target:[x86_64]'
+RUN /spack/bin/spack compiler find
+RUN /spack/bin/spack bootstrap now
+"""
+
+
+# On Debian 13 trixie, this is super fast as gcc 14 is from the system
+[spack_gcc]
+parent_kind = ["spack_base"]
+image = '{parent[image]}-gcc-{version}'
+label = '{parent[label]} GCC {version}'
+version = "14"
+containerfile = """
+FROM {parent[image]}
+RUN /spack/bin/spack install -j 12 gcc@{version}
+"""
+
+[spack_phlex]
+parent_kind = ["spack_gcc"]
+image = '{parent[image]}-phlex-{version}'
+label = '{parent[label]} PHLEX {version}'
+version = "0.1.0"
+containerfile = """
+FROM {parent[image]}
+RUN /spack/bin/spack repo add https://github.com/FNALssi/fnal_art.git
+RUN /spack/bin/spack repo add https://github.com/Framework-R-D/phlex-spack-recipes.git
+RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j 12 phlex %gcc@14"
+"""
