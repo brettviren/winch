@@ -144,6 +144,7 @@ def self_format(dat: dict, return_changed=False, ignore_errors = False) -> dict:
             warn(err)
         debug('resulting formatted dict:')
         debug('\n'.join([f'{k}:{v}' for k,v in dat.items()]))
+    # print(f'FORMAT: {nchanged=}: {dat}')
     if return_changed:
         return dat, nchanged
     return dat
@@ -152,23 +153,28 @@ def digest(obj, hasher=hashlib.sha1):
     '''
     Return a hash digest of an object of various types.
     '''
+    # print(f'DIGEST: {type(obj)}: {obj}')
+
+    # scalar:
 
     if isinstance(obj, str):
         return hasher(obj.encode('utf8')).hexdigest()
 
-    if isinstance(obj, (list,tuple)):
-        return digest(''.join([digest(one) for one in obj]))
-
     if isinstance(obj, int):
-        return hasher(obj.to_bytes())
+        return hasher(obj.to_bytes()).hexdigest()
 
     if isinstance(obj, float):
-        return digest(hash(obj))
+        return hasher(obj.hex()).hexdigest()
+
+    # compounds:
+
+    if isinstance(obj, (list,tuple)):
+        return digest(''.join([digest(one) for one in obj]))
 
     if isinstance(obj, dict):
         return digest([digest(i) for i in obj.items()])
 
-    return digest(hash(obj))    # hail mary
+    return digest(hasher(obj))    # hail mary
         
     
 def outer_product(dat, **common):
