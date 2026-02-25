@@ -1,0 +1,143 @@
+# A winch config in support of the BNL LDRD-C work on edep-sim+eic-opticks.
+
+[debian]
+release = ['bookworm', 'trixie']
+image = '{kind}:{release}'
+label = '{kind} {release}'
+
+[alma]
+release = ["9"]
+image = 'almalinux:{release}'
+label = '{kind} {release}'
+
+# FIXME: add to base: uv, jq
+
+[alma_base]
+parent_kind = "alma"
+image = '{parent[kind]}-{parent[release]}'
+label = '{parent[label]} base'
+containerfile = """
+FROM {parent[image]}
+RUN dnf update -y && dnf install -y "@Development Tools" \
+    ca-certificates gcc-gfortran git gnupg2 clang \
+    autoconf unzip zip man-db \
+    emacs wget \
+    python3 python3-setuptools python3-pip python3-devel \
+    zlib-devel && dnf clean -y all
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+"""
+
+[debian_base]
+parent_kind = "debian"
+image = '{parent[kind]}-{parent[release]}'
+label = '{parent[label]} base'
+# The template will be formated with params of this node and the parent.
+containerfile = """
+FROM {parent[image]}
+RUN sed -e 's/Components: main/Components: main contrib non-free non-free-firmware/g' -i /etc/apt/sources.list.d/debian.sources 
+RUN apt-get update \
+    && \
+    apt-get install -y \
+      build-essential ca-certificates coreutils curl gfortran git gpg clang autoconf \
+      lsb-release unzip zip direnv man-db emacs wget \
+      python-is-python3 python3 python3-setuptools python3-venv python3-click python3-yaml \
+      locales zlib1g-dev llvm \
+      libcuda1 \
+    && \
+    apt-get clean
+"""
+
+[spack_base]
+parent_kind = ["debian_base", "alma_base"]
+image = '{parent[image]}-spack-{version}'
+label = '{parent[label]} spack {version}'
+version = "v1.1.1"
+containerfile = """
+FROM {parent[image]}
+RUN git clone --branch {version} --depth=2 https://github.com/spack/spack.git
+RUN /spack/bin/spack config add 'packages:all:target:[x86_64]'
+RUN /spack/bin/spack compiler find
+RUN /spack/bin/spack bootstrap now
+"""
+
+
+[eodev]
+parent_kind = ["spack_base"]
+image = '{parent[image]}-eodev-{version}'
+label = '{parent[label]} eodev {version}'
+version = ['main']
+containerfile = """
+FROM {parent[image]}
+
+COPY edep-opticks-spack.tar.gz .
+RUN ls -l edep-opticks-spack.tar.gz
+
+RUN tar -xzf edep-opticks-spack.tar.gz
+RUN /spack/bin/spack repo add edep-opticks-spack/edep_opticks/
+RUN /spack/bin/spack info eicopticks
+RUN /spack/bin/spack spec eicopticks@{version}
+RUN /spack/bin/spack install --only dependencies eicopticks@{version} cuda_arch=89
+RUN /spack/bin/spack install eicopticks@{version} cuda_arch=89
+"""
+
+
+
+[spack_repos]
+parent_kind = ["spack_base"]
+image = '{parent[image]}-repos'
+label = '{parent[label]} repos'
+containerfile = """
+FROM {parent[image]}
+RUN git clone https://github.com/WireCell/edep-opticks-spack.git
+RUN /spack/bin/spack repo add edep-opticks-spack/edep_opticks/
+RUN /spack/bin/spack info edepsim
+RUN /spack/bin/spack info eicopticks
+"""
+
+#
+# Note: we have to figure out how we will integrate edep-sim + eic-opticks.
+#
+# Option A: hard-wire edep-sim to depend on eic-opticks as compile-time option.
+#
+# Option B: add plugin pattern to edep-sim and provide "edep-opticks" plugin that depends on both packages.
+#
+# Option C: Develop an "optical plugin" package to house the interface.  
+#
+# For now, reflect the fact that two packages are disjoint
+
+
+
+# I do not have a good way to combine different versions here.  A hack is to
+# hard-wire version "ma" and complete the string in the containerfile template.
+
+[dependencies]
+parent_kind = ["spack_repos"]
+image = '{parent[image]}-deps-{version}'
+label = '{parent[label]} deps {version}'
+version = ['ma']  
+containerfile = """
+FROM {parent[image]}
+RUN /spack/bin/spack install --only dependencies edepsim@{version}ster
+RUN /spack/bin/spack install --only dependencies eicopticks@{version}in cuda_arch=89
+"""
+
+[edepsim]
+parent_kind = ["dependencies"]
+image = '{parent[image]}-edepsim-{version}'
+label = '{parent[label]} edepsim {version}'
+version = ['master']  
+containerfile = """
+FROM {parent[image]}
+RUN /spack/bin/spack install edepsim@{version}
+"""
+
+[eicopticks]
+parent_kind = ["dependencies"]
+image = '{parent[image]}-eicopticks-{version}'
+label = '{parent[label]} eicopticks {version}'
+version = ['main']
+containerfile = """
+FROM {parent[image]}
+RUN /spack/bin/spack install eicopticks@{version} cuda_arch=89
+"""
+
