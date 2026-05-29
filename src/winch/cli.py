@@ -15,6 +15,7 @@ from .recipe import (resolve as resolve_recipe, parse_set_overrides,
 from .podman import build_image, image_exists, remove_image, image_copy, label_args
 from pathlib import Path
 import functools
+import networkx as nx
 
 # The implicit key to use when user does not provide key=value selector.  This
 # key is domain specific so should not be hard-wired but instead a top-level CLI
@@ -196,6 +197,58 @@ def selection(none_is_all=False):
     return decorator
 
 
+def old_select_options(func):
+    '''
+    Add the old-paradigm I-node selection options (-k/-d/-i) to a command.
+    '''
+    func = click.option("-i","--instances", default=None, type=str,
+                        help='Limit to specific I-nodes (old paradigm).')(func)
+    func = click.option("-d","--deps", default=None, type=str,
+                        help='Limit to I-nodes on which the given inode depends (old paradigm).')(func)
+    func = click.option("-k","--kind", default=None, type=str,
+                        help='Limit to I-nodes made from K-node regardless of path (old paradigm).')(func)
+    return func
+
+
+def recipe_select_options(func):
+    '''
+    Add the new-paradigm recipe-selector options (NAME/--stack/--set) to a command.
+    '''
+    func = click.argument("name", required=False)(func)
+    func = click.option("--set", "sets", multiple=True, metavar="LAYER.VAR=VALUE",
+                        help='Override a layer variable (repeatable, new paradigm).')(func)
+    func = click.option("--stack", default=None,
+                        help='Anonymous recipe: comma-separated layer names (new paradigm).')(func)
+    return func
+
+
+def graph_and_inodes(ctx, kind=None, deps=None, instances=None,
+                     name=None, stack=None, sets=(), none_is_all=False):
+    '''
+    Resolve the (graph, inodes) pair for an inspection command in either
+    paradigm.
+
+    - New paradigm: build the graph from a recipe selector (NAME or
+      --stack/--set; no selector -> union of all named recipes) and return its
+      nodes in dependency order.  Capabilities are NOT validated here so
+      incompatible stacks can still be inspected.
+    - Old paradigm: use the configured graph and the -k/-d/-i selection.
+    '''
+    main = ctx.obj
+    if main.paradigm == "new":
+        stack_list = stack.split(",") if stack else None
+        try:
+            overrides = parse_set_overrides(sets)
+        except ConfigError as err:
+            raise click.ClickException(str(err))
+        graph = main.recipe_graph(name=name, stack=stack_list, sets=overrides,
+                                  validate=False)
+        return graph, list(nx.topological_sort(graph.I))
+
+    inodes = select_inodes(ctx, None, kind, deps, instances, none_is_all)
+    return main.graph, inodes
+
+
 @cli.command("dump-config")
 @click.pass_context
 def cmd_config(ctx):
@@ -203,32 +256,34 @@ def cmd_config(ctx):
     print(json.dumps(ctx.obj.config))
 
 @cli.command("list")
-@selection(none_is_all=True)
+@recipe_select_options
+@old_select_options
 @click.option("-t","--template", default="{image}",
               help="The template for display")
 @click.pass_context
-def cmd_list(ctx, inodes, template):
+def cmd_list(ctx, name, stack, sets, kind, deps, instances, template):
     '''
     List things about the winch graph.
 
-    Default will list all K-nodes.
+    Old paradigm: with -k/-d/-i, list the matching I-nodes (default: all).
 
-    Providing -K/--kpath lists I-nodes from the K-graph path.  A special K-graph
-    path of "all" will list all K-graph paths and no I-nodes.
-
-    Providing -k/--kind lists I-nodes produced from the K-node regardless of
-    K-graph path.
-
-    Providing -d/--deps gives an I-node as its node name (hash) or an
-    "key=value" attribute.
-
-    Providing -i/--instances gives a comma-separated list of I-node, each specified
-    by a node name (hash) or an "key=value" attribute.  A special entry "all"
-    will match all I-nodes.
+    New paradigm: with no selector, list the defined layers and recipes; with a
+    recipe NAME or --stack/--set, list that recipe's resolved instance chain.
     '''
+    main = ctx.obj
     template = template.replace('\\n','\n').replace('\\t','\t')
+
+    if main.paradigm == "new" and not name and not stack:
+        for lname in sorted(main.layers):
+            print(f'layer {lname}')
+        for rname in sorted(main.recipes):
+            print(f'recipe {rname}')
+        return
+
+    graph, inodes = graph_and_inodes(ctx, kind, deps, instances,
+                                     name, stack, sets, none_is_all=True)
     for inode in inodes:
-        data = ctx.obj.graph.data(inode)
+        data = graph.data(inode)
         string = template.format_map(SafeDict(ntype='I', node=inode, **data))
         print(string)
 
@@ -411,7 +466,8 @@ def recipe(ctx, stack, sets, containerfile_attribute, image_attribute,
 
 
 @cli.command("render")
-@selection()
+@recipe_select_options
+@old_select_options
 @click.option("-T", "--template-attribute", default=None,
               help="Name the attribute providing the content to render")
 @click.option("-t", "--template", default=None,
@@ -419,11 +475,15 @@ def recipe(ctx, stack, sets, containerfile_attribute, image_attribute,
 @click.option("-o","--outpath", default=None,
               help='A file path name for output files, may include "{format}" markup')
 @click.pass_context
-def render(ctx, inodes, template, template_attribute, outpath):
+def render(ctx, name, stack, sets, kind, deps, instances,
+           template, template_attribute, outpath):
     '''
     Render a template to a file.
 
     Either -T/--template-attribute or -t/--template are requird
+
+    Old paradigm: select I-nodes with -k/-d/-i.  New paradigm: select with a
+    recipe NAME or --stack/--set (no selector renders all named recipes).
 
     If not -o/--outpath is given, output is to stdout.
     '''
@@ -433,8 +493,9 @@ def render(ctx, inodes, template, template_attribute, outpath):
     if outpath is None:
         outpath = '/dev/stdout'
 
+    graph, inodes = graph_and_inodes(ctx, kind, deps, instances, name, stack, sets)
     for inode in inodes:
-        idata = ctx.obj.graph.data(inode)
+        idata = graph.data(inode)
         opath = outpath.format_map(SafeDict(node=inode, **idata))
         if template_attribute is not None:
             try:
@@ -464,18 +525,35 @@ def extract(image, output, path):
 
 
 @cli.command("dot")
+@recipe_select_options
 @click.option("-o","--output", default="/dev/stdout",
               help='Output for dot content')
 @click.option("-t","--template", default="{image}\n{node}",
               help="The template node label")
 @click.pass_context
-def dot(ctx, output, template):
+def dot(ctx, name, stack, sets, output, template):
     '''
     Emit GraphViz dot representing the configured graph.
+
+    Old paradigm: the whole configured I-graph.  New paradigm: a recipe NAME or
+    --stack/--set selects the chain(s); with no selector the union of all named
+    recipes is shown.
     '''
-    I = ctx.obj.graph.I
+    main = ctx.obj
+    if main.paradigm == "new":
+        stack_list = stack.split(",") if stack else None
+        try:
+            overrides = parse_set_overrides(sets)
+        except ConfigError as err:
+            raise click.ClickException(str(err))
+        graph = main.recipe_graph(name=name, stack=stack_list, sets=overrides,
+                                  validate=False)
+    else:
+        graph = main.graph
+
+    I = graph.I
     for node, data in I.nodes.data():
-        label = template.format(ntype='I', node=node, **data)
+        label = template.format_map(SafeDict(ntype='I', node=node, **data))
         I.nodes[node].clear()
         I.nodes[node]["label"] = label
 
