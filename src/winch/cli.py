@@ -7,7 +7,7 @@ Command line interface to winch.
 import click
 
 from .util import setup_logging, debug, warn, error, self_format, assure_file, SafeDict, looks_like_digest
-from .config import load_many as load_configs
+from .config import load_many as load_configs, parse as parse_config, ConfigError
 from .viz import write_dot
 from .graph import Graph
 from .podman import build_image, image_exists, remove_image, image_copy
@@ -21,16 +21,28 @@ instance_attribute = 'image'
 
 class Main:
     def __init__(self, config=None,):
+        self.paradigm = None
+        self.layers = {}
+        self.recipes = {}
         if config is None:
             return
         self.opts = config.pop("winch",{})
         self.config = config
-        self._graph = Graph(**config)
+        try:
+            self.paradigm, self.layers, self.recipes = parse_config(config)
+        except ConfigError as err:
+            raise click.ClickException(str(err))
+        if self.paradigm == "old":
+            self._graph = Graph(**config)
 
     @property
     def graph(self):
         if hasattr(self, '_graph'):
             return self._graph
+        if self.paradigm == "new":
+            raise click.ClickException(
+                'this is a new-paradigm (layer/recipe) config; the graph-based '
+                'commands are for old-paradigm configs.  Use "winch recipe".')
         raise click.BadParameter('no configuration provided.  Use "winch -c/--config" or set WINCH_CONFIG')
 
 

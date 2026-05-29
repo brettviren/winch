@@ -1,8 +1,16 @@
 #!/usr/bin/env python
 
 from pathlib import Path
+from dataclasses import dataclass, field
 import tomllib
 import os
+
+
+class ConfigError(Exception):
+    '''
+    Raised when a winch configuration is malformed.
+    '''
+    pass
 
 def basedir(name = None, assure = True):
     '''
@@ -85,3 +93,230 @@ def load_many(*paths):
         new = load(my_paths.pop(0))
         cfg = merge(cfg, new)
     return cfg
+
+
+#
+# winch2 "new paradigm": stand-alone [layer.*] fragments composed by [recipe.*]
+# tables.  See doc/winch2-plan.md section 12.  The functions below detect and
+# parse a new-paradigm configuration.  Old-paradigm (bare kind tables with
+# parent_kind) configurations are left untouched and handled by graph.Graph.
+#
+
+# Top-level keys that are not user "kind" tables in either paradigm.
+RESERVED_TOPLEVEL = ("winch",)
+# Top-level namespaces that mark the new paradigm.
+NEW_NAMESPACES = ("layer", "recipe")
+# Layer keys with dedicated meaning (everything else is a layer variable).
+LAYER_SPECIAL = ("provides", "requires", "body", "containerfile")
+# Recipe keys with dedicated meaning (everything else is layer-qualified vars).
+RECIPE_SPECIAL = ("recipe_base", "stack")
+
+
+@dataclass
+class Layer:
+    '''
+    A stand-alone, parent-free container image layer fragment.
+
+    - vars: scalar layer variables (the defaults a recipe may override).  May
+      include an explicit "image" to override digest-based naming.
+    - provides/requires: capability tag lists (see doc section 12.6).
+    - body: Containerfile minus the FROM (winch injects "FROM {parent[image]}").
+    - containerfile: full Containerfile, used verbatim (the escape hatch).
+    '''
+    name: str
+    vars: dict = field(default_factory=dict)
+    provides: list = field(default_factory=list)
+    requires: list = field(default_factory=list)
+    body: str = None
+    containerfile: str = None
+
+
+@dataclass
+class Recipe:
+    '''
+    A composition of layers into one linear stack.
+
+    - recipe_base: names of recipes to inherit from (in order).
+    - stack: ordered list of layer names (base first).
+    - layer_vars: maps a layer name to a dict of variable overrides.
+    '''
+    name: str
+    recipe_base: list = field(default_factory=list)
+    stack: list = field(default_factory=list)
+    layer_vars: dict = field(default_factory=dict)
+
+
+def _is_scalar(value):
+    '''
+    Return True if value is an acceptable scalar for a layer variable.
+    '''
+    return isinstance(value, (str, int, float, bool))
+
+
+def _as_str_list(value, what):
+    '''
+    Normalize a string or list-of-string to a list-of-string.
+
+    Raises ConfigError naming "what" on any other shape.
+    '''
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        for elem in value:
+            if not isinstance(elem, str):
+                raise ConfigError(
+                    f'{what} must be a string or list of strings, '
+                    f'got element {elem!r}')
+        return list(value)
+    raise ConfigError(
+        f'{what} must be a string or list of strings, got {type(value).__name__}')
+
+
+def detect_paradigm(config):
+    '''
+    Return "new" or "old" for the given (merged) configuration dict.
+
+    A config is "new" if it has any [layer.*] or [recipe.*] table.  It is an
+    error (ConfigError) to mix new namespaces with old-style bare kind tables.
+    '''
+    has_new = any(ns in config for ns in NEW_NAMESPACES)
+    if not has_new:
+        return "old"
+
+    # New paradigm: the only other allowed top-level keys are reserved (winch
+    # options).  Any other top-level table is an old-style kind and signals an
+    # illegal mix.
+    strays = [k for k, v in config.items()
+              if k not in NEW_NAMESPACES
+              and k not in RESERVED_TOPLEVEL
+              and isinstance(v, dict)]
+    if strays:
+        raise ConfigError(
+            'configuration mixes new [layer.*]/[recipe.*] tables with '
+            f'old-style kind tables: {sorted(strays)}.  A winch config must '
+            'use either the old or the new paradigm, not both.')
+    return "new"
+
+
+def parse_layer(name, table):
+    '''
+    Parse one [layer.NAME] table into a Layer.
+    '''
+    if "parent_kind" in table:
+        raise ConfigError(
+            f'layer "{name}" has "parent_kind"; the new paradigm composes '
+            'layers via [recipe.*]/--stack, not parent_kind.')
+
+    provides = _as_str_list(table["provides"], f'layer "{name}" provides') \
+        if "provides" in table else []
+    requires = _as_str_list(table["requires"], f'layer "{name}" requires') \
+        if "requires" in table else []
+
+    body = table.get("body", None)
+    if body is not None and not isinstance(body, str):
+        raise ConfigError(f'layer "{name}" body must be a string')
+    containerfile = table.get("containerfile", None)
+    if containerfile is not None and not isinstance(containerfile, str):
+        raise ConfigError(f'layer "{name}" containerfile must be a string')
+
+    variables = dict()
+    for key, value in table.items():
+        if key in LAYER_SPECIAL:
+            continue
+        if isinstance(value, list):
+            raise ConfigError(
+                f'layer "{name}" variable "{key}" is a list; the new paradigm '
+                'has no list-valued variants (only provides/requires are lists).')
+        if not _is_scalar(value):
+            raise ConfigError(
+                f'layer "{name}" variable "{key}" must be a scalar, '
+                f'got {type(value).__name__}')
+        variables[key] = value
+
+    return Layer(name=name, vars=variables,
+                 provides=provides, requires=requires,
+                 body=body, containerfile=containerfile)
+
+
+def parse_recipe(name, table):
+    '''
+    Parse one [recipe.NAME] table into a Recipe.
+
+    TOML nests dotted keys, so both "spack.version = ..." and a
+    [recipe.NAME.spack] subtable arrive here as a dict value under "spack" and
+    are treated uniformly as layer-qualified variables.
+    '''
+    recipe_base = _as_str_list(table["recipe_base"], f'recipe "{name}" recipe_base') \
+        if "recipe_base" in table else []
+
+    stack = table.get("stack", [])
+    if not isinstance(stack, list):
+        raise ConfigError(f'recipe "{name}" stack must be a list of layer names')
+    for elem in stack:
+        if not isinstance(elem, str):
+            raise ConfigError(
+                f'recipe "{name}" stack must contain layer names (strings), '
+                f'got {elem!r}')
+
+    layer_vars = dict()
+    for key, value in table.items():
+        if key in RECIPE_SPECIAL:
+            continue
+        if not isinstance(value, dict):
+            raise ConfigError(
+                f'recipe "{name}" has unexpected key "{key}"={value!r}; layer '
+                'variables must be written as "LAYER.VAR = value".')
+        overrides = dict()
+        for var, val in value.items():
+            if not _is_scalar(val):
+                raise ConfigError(
+                    f'recipe "{name}" override "{key}.{var}" must be a scalar, '
+                    f'got {type(val).__name__}')
+            overrides[var] = val
+        layer_vars[key] = overrides
+
+    return Recipe(name=name, recipe_base=recipe_base,
+                  stack=list(stack), layer_vars=layer_vars)
+
+
+def parse(config):
+    '''
+    Classify and parse a (merged) configuration dict.
+
+    Returns a tuple (paradigm, layers, recipes):
+
+    - paradigm: "old" or "new".
+    - layers: dict mapping layer name to Layer (empty for old paradigm).
+    - recipes: dict mapping recipe name to Recipe (empty for old paradigm).
+
+    Raises ConfigError on a malformed or mixed configuration.
+    '''
+    config = config or {}
+    paradigm = detect_paradigm(config)
+    if paradigm == "old":
+        return "old", {}, {}
+
+    layers = {name: parse_layer(name, table)
+              for name, table in config.get("layer", {}).items()}
+    recipes = {name: parse_recipe(name, table)
+               for name, table in config.get("recipe", {}).items()}
+
+    # A recipe's stack and bases must name things that exist.
+    for recipe in recipes.values():
+        for base in recipe.recipe_base:
+            if base not in recipes:
+                raise ConfigError(
+                    f'recipe "{recipe.name}" recipe_base names unknown '
+                    f'recipe "{base}"')
+        for layer_name in recipe.stack:
+            if layer_name not in layers:
+                raise ConfigError(
+                    f'recipe "{recipe.name}" stack names unknown '
+                    f'layer "{layer_name}"')
+        for layer_name in recipe.layer_vars:
+            if layer_name not in layers:
+                raise ConfigError(
+                    f'recipe "{recipe.name}" sets variables on unknown '
+                    f'layer "{layer_name}"')
+
+    return "new", layers, recipes
