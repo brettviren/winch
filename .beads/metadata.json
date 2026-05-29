@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "winch",
+  "project_id": "0b5e2108-f6d2-45d1-97bc-b39636fa8d62"
+}
