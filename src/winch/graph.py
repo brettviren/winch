@@ -43,6 +43,37 @@ import networkx as nx
 WINCH_IMAGE_PREFIX = "localhost/winch"
 # Number of hex digest characters used in an auto-generated image tag.
 WINCH_IMAGE_DIGEST_LEN = 12
+# Instance-data keys created by build_instance that are not layer variables.
+INSTANCE_STRUCTURAL_KEYS = ("kind", "parent", "containerfile", "image")
+
+
+def instance_labels(node, idata, provides=()):
+    '''
+    Build the winch.* provenance label mapping for one built instance.
+
+    - node: the instance's content digest (full, e.g. the I-graph node id).
+    - idata: the formatted instance data.
+    - provides: an iterable of (already self-formatted) capability strings the
+      layer provides.
+
+    Returns a dict suitable for podman.label_args():
+      winch.layer    -> idata["kind"]
+      winch.digest   -> node
+      winch.var.<k>  -> value, for each resolved layer variable
+      winch.provides -> comma-joined provides (only when non-empty)
+    '''
+    labels = {
+        "winch.layer": idata.get("kind", ""),
+        "winch.digest": node,
+    }
+    for key, value in idata.items():
+        if key in INSTANCE_STRUCTURAL_KEYS:
+            continue
+        labels[f"winch.var.{key}"] = value
+    provides = list(provides)
+    if provides:
+        labels["winch.provides"] = ",".join(provides)
+    return labels
 
 
 def _content_digest(idata):

@@ -83,6 +83,37 @@ def build_image(name, containerfile, *args):
     return podman(["build"] + list(args) + ["-t", name, context])
 
 
+def label_args(labels):
+    '''
+    Return a "podman build" argument list applying the given labels.
+
+    - labels :: a mapping of label name to value.
+
+    Returns a flat list such as ['--label', 'winch.layer=spack', '--label',
+    'winch.digest=abc...'].  Values are stringified and arguments are emitted in
+    sorted-key order for deterministic output.  Args are passed to podman as a
+    list (not via a shell), so values need no shell quoting.
+    '''
+    out = list()
+    for key in sorted(labels):
+        out += ["--label", f'{key}={labels[key]}']
+    return out
+
+
+def image_labels(name):
+    '''
+    Return the dict of labels on an image (empty dict if none/no labels).
+    '''
+    import json
+    podman = which("podman")
+    out = podman(['inspect', '--format', '{{json .Config.Labels}}', name],
+                 capture_output=True)
+    text = out.stdout.decode().strip()
+    if not text or text == "null":
+        return dict()
+    return json.loads(text) or dict()
+
+
 def image_exists(name):
     '''
     Return True only if image exists.

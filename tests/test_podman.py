@@ -23,3 +23,19 @@ def test_build():
         podman.build_image(name, p)
         assert podman.image_exists(name)
         assert podman.remove_image(name)
+
+
+def test_build_with_labels():
+    name = 'winch-test-labels'
+    if podman.image_exists(name):
+        podman.remove_image(name)
+    labels = {"winch.layer": "alma", "winch.var.release": "9",
+              "winch.provides": "os:alma,tools"}
+    with TempDir() as tmp:
+        p = tmp / "Containerfile"
+        podman.assure_context(p, 'FROM almalinux:9')
+        podman.build_image(name, p, *podman.label_args(labels))
+        got = podman.image_labels(name)
+        for k, v in labels.items():
+            assert got.get(k) == v
+        assert podman.remove_image(name)
