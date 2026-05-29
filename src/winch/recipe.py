@@ -164,6 +164,14 @@ def _resolve_caps(caps, variables):
     return [work[key] for key in keys]
 
 
+def formatted_provides(layer, variables):
+    '''
+    Return a layer's "provides" capabilities, self-formatted against its
+    resolved variables (e.g. "pkg:gcc@{version}" -> "pkg:gcc@14").
+    '''
+    return _resolve_caps(layer.provides, variables)
+
+
 def _requirement_satisfied(requirement, avail):
     '''
     A requirement is satisfied iff any of its "|"-separated alternatives is in

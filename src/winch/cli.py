@@ -9,9 +9,10 @@ import click
 from .util import setup_logging, debug, warn, error, self_format, assure_file, SafeDict, looks_like_digest
 from .config import load_many as load_configs, parse as parse_config, ConfigError
 from .viz import write_dot
-from .graph import Graph, generate_instances
-from .recipe import resolve as resolve_recipe, parse_set_overrides, validate_capabilities
-from .podman import build_image, image_exists, remove_image, image_copy
+from .graph import Graph, generate_instances, instance_labels
+from .recipe import (resolve as resolve_recipe, parse_set_overrides,
+                     validate_capabilities, formatted_provides)
+from .podman import build_image, image_exists, remove_image, image_copy, label_args
 from pathlib import Path
 import functools
 
@@ -264,8 +265,23 @@ def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force,
     The --force option will remove an image and thus cause a rebuild regardless
     if one is needed or not.
     '''
+    _build_inodes(ctx.obj.graph, inodes, containerfile_attribute, image_attribute,
+                  rebuild, force, outpath, args)
+
+
+def _build_inodes(graph, inodes, containerfile_attribute, image_attribute,
+                  rebuild, force, outpath, args, labels_for=None):
+    '''
+    Build the given ordered I-nodes from a graph.
+
+    Shared by the old-paradigm "build" and the new-paradigm "recipe" commands.
+
+    - inodes: I-node ids in dependency order (parents before children).
+    - labels_for: optional callable(inode, idata) -> list of extra "podman
+      build" arguments (e.g. winch.* --label args); used by "recipe".
+    '''
     for inode in inodes:
-        idata = ctx.obj.graph.data(inode)
+        idata = graph.data(inode)
         image = idata[image_attribute]
 
         exists = image_exists(image)
@@ -283,7 +299,7 @@ def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force,
             debug(f'building {image} with no cache')
 
         if exists and (
-                rebuild == "none" 
+                rebuild == "none"
                 or
                 (rebuild == "deps" and inode == inodes[-1])
                 or
@@ -307,11 +323,91 @@ def build(ctx, inodes, containerfile_attribute, image_attribute, rebuild, force,
         debug(f'{idata=}')
         image_format = idata.get("image_format", None)
         if image_format:
-            debug(f'using image format "{image_format}"') 
+            debug(f'using image format "{image_format}"')
             extra_args.append(f'--format={image_format}')
+
+        if labels_for is not None:
+            extra_args += labels_for(inode, idata)
 
         extra_args += args
         build_image(image, cpath, *extra_args)
+
+
+@cli.command("recipe", context_settings=dict(
+    ignore_unknown_options=True,
+    allow_extra_args=True))
+@click.option("--stack", default=None,
+              help="Anonymous recipe: a comma-separated list of layer names")
+@click.option("--set", "sets", multiple=True, metavar="LAYER.VAR=VALUE",
+              help="Override a layer variable (repeatable, highest precedence)")
+@click.option("--containerfile-attribute", default="containerfile",
+              help="Name the attribute providing the Containerfile content")
+@click.option("--image-attribute", default="image",
+              help="Name the attribute providing the image name")
+@click.option("-r","--rebuild", default="all",
+              type=click.Choice(["none","all","deps","last"]),
+              help="Control what to let podman attempt to rebuild if image exists")
+@click.option("-f","--force", default="none",
+              type=click.Choice(["none","all","deps","last"]),
+              help="Force a rebuild by removing existing image that maps the selector")
+@click.option("-o","--outpath", default='winch-contexts/{kind}-{node}/Containerfile',
+              help='A file path name for output files, may include "{format}" markup')
+@click.argument("name", required=False)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+@click.pass_context
+def recipe(ctx, stack, sets, containerfile_attribute, image_attribute,
+           rebuild, force, outpath, name, args):
+    '''
+    Build container images from a new-paradigm recipe.
+
+    Give either a named recipe NAME or an anonymous recipe via --stack.  Layer
+    variables may be overridden with repeated --set LAYER.VAR=VALUE (highest
+    precedence).
+
+    Capabilities are validated before any image is built.  Each built image
+    carries winch.* provenance labels (layer, digest, variables, provides).
+
+    Examples:
+
+      winch recipe phlex-debian
+      winch recipe --stack debian,spack --set debian.release=trixie
+    '''
+    main = ctx.obj
+    if main.paradigm != "new":
+        raise click.ClickException(
+            '"winch recipe" requires a new-paradigm (layer/recipe) config.')
+
+    if stack and name:
+        raise click.ClickException(
+            'give either a recipe NAME or --stack, not both '
+            f'(got name="{name}" and --stack="{stack}")')
+    if not stack and not name:
+        raise click.ClickException('give a recipe NAME or --stack <layers>')
+
+    stack_list = stack.split(",") if stack else None
+    try:
+        overrides = parse_set_overrides(sets)
+        rr = resolve_recipe(main.layers, main.recipes,
+                            name=name, stack=stack_list, sets=overrides)
+        # Validate capabilities before any podman call.
+        validate_capabilities(main.layers, rr)
+        graph = generate_instances(main.layers, [rr])
+    except ConfigError as err:
+        raise click.ClickException(str(err))
+
+    leaves = [n for n in graph.I.nodes() if graph.I.out_degree(n) == 0]
+    if not leaves:
+        warn(f'recipe "{rr.name}" has no layers to build')
+        return
+    inodes = graph.ipath(leaves[0])
+
+    def labels_for(inode, idata):
+        layer = main.layers[idata["kind"]]
+        provides = formatted_provides(layer, rr.layer_vars[idata["kind"]])
+        return label_args(instance_labels(inode, idata, provides))
+
+    _build_inodes(graph, inodes, containerfile_attribute, image_attribute,
+                  rebuild, force, outpath, args, labels_for=labels_for)
 
 
 @cli.command("render")
