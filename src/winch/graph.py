@@ -34,8 +34,101 @@ parameters.
 
 '''
 
-from .util import debug, digest, outer_product, self_format, product
+from .util import debug, digest, outer_product, self_format, product, find_unresolved
+from .config import ConfigError
 import networkx as nx
+
+
+# Prefix for auto-generated (digest-tagged) new-paradigm image names.
+WINCH_IMAGE_PREFIX = "localhost/winch"
+# Number of hex digest characters used in an auto-generated image tag.
+WINCH_IMAGE_DIGEST_LEN = 12
+
+
+def _content_digest(idata):
+    '''
+    Digest of an instance's data excluding its own "image" name.
+
+    The image name is derived from this digest, so it must not feed it.  A
+    child's data embeds its parent (including the parent's image name), so the
+    digest chains down the stack and identical stack prefixes dedupe.
+    '''
+    return digest({k: v for k, v in idata.items() if k != "image"})
+
+
+def build_instance(layer, variables, parent_idata):
+    '''
+    Build the unformatted instance-data dict for one layer in a stack.
+
+    - layer: a config.Layer.
+    - variables: the resolved variable map for this layer (defaults + overrides),
+      which may include an explicit "image" to override digest-based naming.
+    - parent_idata: the formatted instance data of the previous layer, or None
+      for the base layer.
+
+    Capability tags (provides/requires) are intentionally NOT placed in the
+    instance data: they are build-irrelevant metadata and must not affect the
+    content digest (and thus the image identity).
+    '''
+    idata = dict(variables)
+    idata["kind"] = layer.name
+    if parent_idata is not None:
+        idata["parent"] = parent_idata
+    if layer.containerfile is not None:
+        idata["containerfile"] = layer.containerfile
+    elif layer.body is not None:
+        idata["containerfile"] = "FROM {parent[image]}\n" + layer.body
+    return idata
+
+
+def generate_instances(layers, resolved_recipes, graph=None):
+    '''
+    Build I-graph instance chains for the new paradigm.
+
+    - layers: dict of layer name to config.Layer.
+    - resolved_recipes: iterable of recipe.ResolvedRecipe.
+    - graph: an existing Graph to extend, or None to start fresh.
+
+    Returns the Graph whose .I holds the deduped union of all recipe chains.
+    Raises ConfigError if a buildable layer has unresolved "{...}" markup.
+    '''
+    if graph is None:
+        graph = Graph()
+    I = graph.I
+
+    for rr in resolved_recipes:
+        parent_idata = None
+        parent_inode = None
+        for layer_name in rr.stack:
+            layer = layers[layer_name]
+            idata = build_instance(layer, rr.layer_vars[layer_name], parent_idata)
+
+            # Capture original string values (escapes intact) for the resolution
+            # check, then self-format in place.
+            originals = {k: v for k, v in idata.items() if isinstance(v, str)}
+            self_format(idata)
+
+            unresolved = find_unresolved(originals, idata)
+            if unresolved:
+                detail = "; ".join(f'{k}: {refs}' for k, refs in sorted(unresolved.items()))
+                raise ConfigError(
+                    f'recipe "{rr.name}" layer "{layer_name}" has unresolved '
+                    f'markup: {detail}')
+
+            inode = _content_digest(idata)
+            if idata.get("image") is None:
+                idata["image"] = (f'{WINCH_IMAGE_PREFIX}/{layer_name}'
+                                  f':{inode[:WINCH_IMAGE_DIGEST_LEN]}')
+
+            if inode not in I:
+                I.add_node(inode, **idata)
+            if parent_inode is not None:
+                I.add_edge(parent_inode, inode)
+
+            parent_idata = idata
+            parent_inode = inode
+
+    return graph
 
 class Graph:
 

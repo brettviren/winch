@@ -149,6 +149,50 @@ def self_format(dat: dict, return_changed=False, ignore_errors = False) -> dict:
         return dat, nchanged
     return dat
 
+class _MissTracker(dict):
+    '''
+    A formatting mapping that records missing top-level keys instead of raising.
+    '''
+    def __init__(self, data, missing):
+        super().__init__(data)
+        self._missing = missing
+
+    def __missing__(self, key):
+        self._missing.add(key)
+        return '{' + key + '}'
+
+
+def find_unresolved(originals, namespace):
+    '''
+    Return a dict mapping field name to a sorted list of unresolved reference
+    names, for any original string value that references a key absent from
+    namespace.
+
+    - originals: maps field name to its pre-format string value, with Python
+      "{{"/"}}" brace escapes still intact.
+    - namespace: the fully self-formatted instance dict.
+
+    Each original is formatted exactly once.  Because the escapes are intact, a
+    literal brace written as "{{"/"}}" (e.g. a shell "${{VAR}}") is not mistaken
+    for an unresolved field, while a genuine "{missing}" reference is recorded.
+    '''
+    unresolved = dict()
+    for field, value in originals.items():
+        missing = set()
+        try:
+            value.format_map(_MissTracker(namespace, missing))
+        except KeyError as err:
+            # e.g. {parent[badsub]} where parent exists but lacks the subkey.
+            missing.add(err.args[0] if err.args else str(err))
+        except (TypeError, ValueError):
+            # e.g. {parent[x]} where parent is missing/not a mapping; the absent
+            # base key was already recorded via _MissTracker.__missing__.
+            pass
+        if missing:
+            unresolved[field] = sorted(missing)
+    return unresolved
+
+
 def digest(obj, hasher=hashlib.sha1):
     '''
     Return a hash digest of an object of various types.

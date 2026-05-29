@@ -9,7 +9,8 @@ import click
 from .util import setup_logging, debug, warn, error, self_format, assure_file, SafeDict, looks_like_digest
 from .config import load_many as load_configs, parse as parse_config, ConfigError
 from .viz import write_dot
-from .graph import Graph
+from .graph import Graph, generate_instances
+from .recipe import resolve as resolve_recipe, parse_set_overrides
 from .podman import build_image, image_exists, remove_image, image_copy
 from pathlib import Path
 import functools
@@ -44,6 +45,31 @@ class Main:
                 'this is a new-paradigm (layer/recipe) config; the graph-based '
                 'commands are for old-paradigm configs.  Use "winch recipe".')
         raise click.BadParameter('no configuration provided.  Use "winch -c/--config" or set WINCH_CONFIG')
+
+    def recipe_graph(self, name=None, stack=None, sets=None):
+        '''
+        Resolve a new-paradigm recipe selector and generate its instance graph.
+
+        - name: a named recipe, or
+        - stack: a list of layer names (anonymous recipe), or
+        - neither: the union of all named recipes (deduped by digest).
+        - sets: an override map {layer: {var: value}} (highest precedence).
+
+        Returns a Graph whose .I holds the resolved instance chain(s).
+        '''
+        if self.paradigm != "new":
+            raise click.ClickException(
+                '"winch recipe" requires a new-paradigm (layer/recipe) config.')
+        try:
+            if name is None and stack is None:
+                resolved = [resolve_recipe(self.layers, self.recipes, name=rname)
+                            for rname in self.recipes]
+            else:
+                resolved = [resolve_recipe(self.layers, self.recipes,
+                                           name=name, stack=stack, sets=sets)]
+            return generate_instances(self.layers, resolved)
+        except ConfigError as err:
+            raise click.ClickException(str(err))
 
 
 cmddef = dict(context_settings = dict(auto_envvar_prefix='WINCH',
