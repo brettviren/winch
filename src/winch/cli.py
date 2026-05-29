@@ -10,7 +10,7 @@ from .util import setup_logging, debug, warn, error, self_format, assure_file, S
 from .config import load_many as load_configs, parse as parse_config, ConfigError
 from .viz import write_dot
 from .graph import Graph, generate_instances
-from .recipe import resolve as resolve_recipe, parse_set_overrides
+from .recipe import resolve as resolve_recipe, parse_set_overrides, validate_capabilities
 from .podman import build_image, image_exists, remove_image, image_copy
 from pathlib import Path
 import functools
@@ -46,7 +46,7 @@ class Main:
                 'commands are for old-paradigm configs.  Use "winch recipe".')
         raise click.BadParameter('no configuration provided.  Use "winch -c/--config" or set WINCH_CONFIG')
 
-    def recipe_graph(self, name=None, stack=None, sets=None):
+    def recipe_graph(self, name=None, stack=None, sets=None, validate=True):
         '''
         Resolve a new-paradigm recipe selector and generate its instance graph.
 
@@ -54,6 +54,8 @@ class Main:
         - stack: a list of layer names (anonymous recipe), or
         - neither: the union of all named recipes (deduped by digest).
         - sets: an override map {layer: {var: value}} (highest precedence).
+        - validate: check capability compatibility (default True); commands that
+          only inspect (list/dot) may pass False to view incompatible stacks.
 
         Returns a Graph whose .I holds the resolved instance chain(s).
         '''
@@ -67,6 +69,9 @@ class Main:
             else:
                 resolved = [resolve_recipe(self.layers, self.recipes,
                                            name=name, stack=stack, sets=sets)]
+            if validate:
+                for rr in resolved:
+                    validate_capabilities(self.layers, rr)
             return generate_instances(self.layers, resolved)
         except ConfigError as err:
             raise click.ClickException(str(err))

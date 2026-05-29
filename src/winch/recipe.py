@@ -18,6 +18,7 @@ generator (winch-lnz) and capability validator (winch-ych).
 from dataclasses import dataclass, field
 
 from .config import ConfigError, Recipe
+from .util import self_format
 
 
 @dataclass
@@ -141,3 +142,60 @@ def resolve(layers, recipes, name=None, stack=None, sets=None):
         resolved[layer_name] = dict(layer.vars, **overrides.get(layer_name, {}))
 
     return ResolvedRecipe(name=rname, stack=eff_stack, layer_vars=resolved)
+
+
+def _resolve_caps(caps, variables):
+    '''
+    Self-format capability strings against a layer's (raw) resolved variables.
+
+    Capabilities may reference layer variables, e.g. "pkg:gcc@{version}".  The
+    variables are themselves resolved to a fixpoint alongside the capabilities
+    so chained references (e.g. spec = "{package}@{version}") work too.
+    '''
+    if not caps:
+        return []
+    work = dict(variables)
+    keys = list()
+    for i, cap in enumerate(caps):
+        key = f'__winch_cap_{i}__'
+        work[key] = cap
+        keys.append(key)
+    self_format(work)
+    return [work[key] for key in keys]
+
+
+def _requirement_satisfied(requirement, avail):
+    '''
+    A requirement is satisfied iff any of its "|"-separated alternatives is in
+    avail (an entry with no "|" is a single exact alternative).
+    '''
+    return any(alt in avail for alt in requirement.split("|"))
+
+
+def validate_capabilities(layers, resolved):
+    '''
+    Validate capability compatibility over a resolved recipe's stack.
+
+    Walks the stack base->top accumulating each layer's (self-formatted)
+    "provides" into a set.  Before adding a layer's own provides, every entry in
+    its "requires" must be satisfied by what lies below it (OR within an entry
+    via "|", AND across entries).
+
+    Returns the full set of provided capabilities.  Raises ConfigError naming
+    the recipe, layer, unmet requirement and the available set on failure.
+    '''
+    avail = set()
+    for layer_name in resolved.stack:
+        layer = layers[layer_name]
+        variables = resolved.layer_vars[layer_name]
+
+        for requirement in _resolve_caps(layer.requires, variables):
+            if not _requirement_satisfied(requirement, avail):
+                raise ConfigError(
+                    f'recipe "{resolved.name}" layer "{layer_name}" requires '
+                    f'"{requirement}" but the stack below provides '
+                    f'{sorted(avail)}')
+
+        avail.update(_resolve_caps(layer.provides, variables))
+
+    return avail
