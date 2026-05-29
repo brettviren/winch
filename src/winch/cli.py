@@ -54,7 +54,9 @@ class Main:
 
         - name: a named recipe, or
         - stack: a list of layer names (anonymous recipe), or
-        - neither: the union of all named recipes (deduped by digest).
+        - neither: the union of all named recipes (deduped by digest).  Recipes
+          that cannot be realized standalone (e.g. a partial inheritance base
+          with no concrete root) are skipped with a warning.
         - sets: an override map {layer: {var: value}} (highest precedence).
         - validate: check capability compatibility (default True); commands that
           only inspect (list/dot) may pass False to view incompatible stacks.
@@ -64,17 +66,27 @@ class Main:
         if self.paradigm != "new":
             raise click.ClickException(
                 '"winch recipe" requires a new-paradigm (layer/recipe) config.')
+
+        if name is None and stack is None:
+            # Union of all named recipes.  Tolerate recipes that are only meant
+            # as inheritance bases (and so do not generate standalone).
+            union = Graph()
+            for rname in self.recipes:
+                try:
+                    rr = resolve_recipe(self.layers, self.recipes, name=rname)
+                    if validate:
+                        validate_capabilities(self.layers, rr)
+                    union.I.update(generate_instances(self.layers, [rr]).I)
+                except ConfigError as err:
+                    warn(f'skipping recipe "{rname}": {err}')
+            return union
+
         try:
-            if name is None and stack is None:
-                resolved = [resolve_recipe(self.layers, self.recipes, name=rname)
-                            for rname in self.recipes]
-            else:
-                resolved = [resolve_recipe(self.layers, self.recipes,
-                                           name=name, stack=stack, sets=sets)]
+            rr = resolve_recipe(self.layers, self.recipes,
+                                name=name, stack=stack, sets=sets)
             if validate:
-                for rr in resolved:
-                    validate_capabilities(self.layers, rr)
-            return generate_instances(self.layers, resolved)
+                validate_capabilities(self.layers, rr)
+            return generate_instances(self.layers, [rr])
         except ConfigError as err:
             raise click.ClickException(str(err))
 

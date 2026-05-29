@@ -1,0 +1,128 @@
+# A winch *new paradigm* config to build the phlex stack.
+#
+# This mirrors example/phlex.toml but uses the composable layer/recipe model:
+#
+#   - [layer.*] tables are stand-alone, parent-free fragments.  They name no
+#     parent and (except for base layers) provide only a `body` -- the
+#     Containerfile minus its FROM, which winch injects as "FROM {parent[image]}".
+#   - Base layers (debian, alma) have no parent so use the `containerfile`
+#     escape hatch to supply their own FROM.
+#   - Capabilities (provides/requires) document and enforce what each layer
+#     needs from the stack below it.  "os:debian|os:alma" is an OR alternation.
+#   - [recipe.*] tables compose layers into a stack.  recipe_base inheritance
+#     lets phlex-debian / phlex-alma share one phlex-stack recipe.
+#
+# Try it:
+#   winch -c example/phlex2.toml list
+#   winch -c example/phlex2.toml list phlex-debian -t '{kind} {image}'
+#   winch -c example/phlex2.toml dot phlex-debian -o phlex2.dot
+#   winch -c example/phlex2.toml render phlex-debian -T containerfile -o 'ctx/{kind}/Containerfile'
+#   winch -c example/phlex2.toml recipe phlex-debian        # builds (needs podman)
+
+
+## --- base layers (use the containerfile escape hatch for their own FROM) ---
+
+[layer.debian]
+release = "bookworm"
+provides = ["os:debian", "pkg-mgr:apt"]
+containerfile = "FROM debian:{release}\n"
+
+[layer.alma]
+release = "9"
+provides = ["os:alma", "pkg-mgr:dnf"]
+containerfile = "FROM almalinux:{release}\n"
+
+
+## --- OS-specific development bases (body layers; FROM is injected) ---
+
+[layer.debian_base]
+requires = ["os:debian"]
+provides = ["devtools", "uv"]
+body = """
+RUN apt-get update \
+    && \
+    apt-get install -y \
+      build-essential ca-certificates coreutils curl gfortran git gpg clang autoconf \
+      lsb-release unzip zip direnv man-db emacs wget \
+      python-is-python3 python3 python3-setuptools python3-venv python3-click python3-yaml \
+      locales zlib1g-dev llvm \
+    && \
+    apt-get clean
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+"""
+
+[layer.alma_base]
+requires = ["os:alma"]
+provides = ["devtools", "uv"]
+body = """
+RUN dnf update -y && dnf install -y "@Development Tools" \
+    ca-certificates gcc-gfortran git gnupg2 clang \
+    autoconf unzip zip man-db \
+    emacs wget \
+    python3 python3-setuptools python3-pip python3-devel \
+    zlib-devel && dnf clean -y all
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+"""
+
+
+## --- the spack ecosystem (OS-agnostic body layers) ---
+
+# https://github.com/Framework-R-D/phlex/blob/main/INSTALLATION.md
+[layer.spack]
+version = "v1.1.0"
+requires = ["os:debian|os:alma"]
+provides = ["spack"]
+body = """
+RUN git clone --branch {version} --depth=2 https://github.com/spack/spack.git
+RUN /spack/bin/spack config add 'packages:all:target:[x86_64]'
+RUN /spack/bin/spack compiler find
+RUN /spack/bin/spack bootstrap now
+"""
+
+[layer.spack_gcc]
+version = "14"
+requires = ["spack"]
+provides = ["pkg:gcc@{version}"]
+body = """
+RUN /spack/bin/spack install -j 12 gcc@{version}
+"""
+
+[layer.spack_phlex]
+version = "0.1.0"
+gccversion = "14"
+requires = ["spack", "pkg:gcc@{gccversion}"]
+provides = ["phlex"]
+body = """
+RUN /spack/bin/spack repo add https://github.com/FNALssi/fnal_art.git
+RUN /spack/bin/spack repo add https://github.com/Framework-R-D/phlex-spack-recipes.git
+RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j 12 phlex %gcc@{gccversion}"
+"""
+
+
+## --- recipes ---
+
+# OS bases as their own recipes (also usable standalone).
+[recipe.debian]
+stack = ["debian", "debian_base"]
+debian.release = "trixie"
+
+[recipe.alma]
+stack = ["alma", "alma_base"]
+alma.release = "9"
+
+# The shared phlex stack, with all spack-layer versions pinned in one place.
+# It declares no OS base -- it is meant to be inherited on top of one.
+[recipe.phlex-stack]
+stack = ["spack", "spack_gcc", "spack_phlex"]
+spack.version = "v1.1.0"
+spack_gcc.version = "14"
+spack_phlex.version = "0.1.0"
+spack_phlex.gccversion = "14"
+
+# Compose an OS base + the phlex stack via multi-base inheritance.  The
+# effective stack is the concatenation: <os base stack> + <phlex-stack stack>.
+[recipe.phlex-debian]
+recipe_base = ["debian", "phlex-stack"]
+
+[recipe.phlex-alma]
+recipe_base = ["alma", "phlex-stack"]

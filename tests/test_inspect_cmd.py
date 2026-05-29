@@ -100,6 +100,32 @@ def test_dot_old_paradigm_unaffected():
     assert "digraph" in out
 
 
+PARTIAL_BASE_CFG = """
+[layer.debian]
+provides = ["os:debian"]
+containerfile = "FROM debian\\n"
+[layer.spack]
+requires = ["os:debian"]
+body = "RUN spack\\n"
+# 'stackonly' is a partial inheritance base: it uses a body layer as its first
+# (no OS root), so it cannot be generated standalone.
+[recipe.stackonly]
+stack = ["spack"]
+[recipe.full]
+stack = ["debian", "spack"]
+"""
+
+
+def test_dot_union_skips_unrealizable_base():
+    # The union must tolerate a partial base recipe (skipped with a warning),
+    # still emitting the realizable 'full' recipe (debian -> spack = 2 nodes).
+    res, out = invoke(PARTIAL_BASE_CFG, "dot", "-o", "g.dot", write="g.dot")
+    assert res.exit_code == 0, res.output
+    assert "skipping recipe" in res.output
+    assert "stackonly" in res.output
+    assert out.count("[label=") == 2
+
+
 # --- render -----------------------------------------------------------------
 
 def test_render_named_recipe_to_file():
