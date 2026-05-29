@@ -1,0 +1,1 @@
+{"id":"int-2ac9011d","kind":"field_change","created_at":"2026-05-29T20:07:33.519325128Z","actor":"Brett Viren","issue_id":"winch-4rh","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Implemented config detection + layer/recipe parsing with tests (22 new, all passing)."}}
