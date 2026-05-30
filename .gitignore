@@ -10,6 +10,10 @@ wheels/
 .venv
 *~
 
+# Test / coverage artifacts
+.coverage
+.pytest_cache/
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
