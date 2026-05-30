@@ -8,6 +8,19 @@ configuration file.
 
 *winch* also provides special support to generate [[https://podman.io/][podman]] ~Containerfile~ files and build them into *podman* images.
 
+*winch* supports two configuration *paradigms*:
+
+- The original *kind* paradigm where each TOML table names its ~parent_kind~ and
+  the tree of image layers is thus baked into the configuration.  This is
+  described in sections [[Configuration]] and [[How *winch* works]].
+
+- The newer *layer/recipe* paradigm where stand-alone, parent-free *layers* are
+  composed into a build tree only at realization time by *recipes*.  This is
+  described in section [[The new paradigm: layers and recipes]].
+
+A given run uses one paradigm or the other; the two are never mixed within the
+configuration given to a single ~winch~ invocation (see [[Paradigm detection]]).
+
 * How to use *winch*
 
 This section describes how to install *winch* and run it using a provided example configuration.
@@ -94,6 +107,11 @@ tips]].
 
 
 * Configuration
+
+#+begin_quote
+This section and [[How *winch* works]] describe the original *kind* paradigm.  For
+the newer composable model see [[The new paradigm: layers and recipes]].
+#+end_quote
 
 *winch* reads a configuration file written in the simple [[https://toml.io/][TOML]] format.  Each
 top level TOML "table" (aka "section" or "stanza" or "object") provides a set of
@@ -222,6 +240,278 @@ traversal algorithm:
 6. Continue to next kind in the path.
 
 7. Continue to the next path.
+
+
+* The new paradigm: layers and recipes
+
+The original *kind* paradigm bakes the tree of image layers into the
+configuration: each table names its ~parent_kind~.  This makes layers hard to
+reuse and compose.  The *layer/recipe* paradigm decouples the two concerns:
+
+- A *layer* is a stand-alone, parent-free fragment.  It never names a parent.
+- A *recipe* composes an ordered *stack* of layers into a build tree, and only
+  at that point is parentage established.
+
+Because a layer's body is almost always "start ~FROM~ the parent image, then do
+something", *winch* injects the ~FROM~ line for you.  Because composition is
+explicit, *winch* can name images deterministically and validate that layers fit
+together before building.
+
+A complete, runnable example is [[https://github.com/brettviren/winch/tree/master/example/phlex2.toml][~example/phlex2.toml~]].  It mirrors the original
+[[https://github.com/brettviren/winch/tree/master/example/phlex.toml][~example/phlex.toml~]] so the two paradigms may be compared directly.
+
+** Paradigm detection
+
+After *winch* loads and merges all given configuration files it classifies the
+result:
+
+- If any table appears under the ~layer~ or ~recipe~ top-level namespace (/ie/ a
+  ~[layer.NAME]~ or ~[recipe.NAME]~ table) the configuration is the *new*
+  paradigm.
+
+- Otherwise it is the *original* paradigm.
+
+It is an error to *mix* the two.  A configuration holding a ~[layer.*]~ or
+~[recipe.*]~ table together with an old-style bare *kind* table is rejected with
+a clear message.  The original-paradigm commands (~build~, ~kpaths~, …) and the
+new-paradigm command (~recipe~) each refuse to run against the other paradigm.
+
+** Layers
+
+A layer is declared with a ~[layer.NAME]~ table.  Any scalar parameter is a
+*layer variable* (a default that a recipe may override).  A few keys are
+special:
+
+- ~body~ :: the ~Containerfile~ content *minus* the ~FROM~ line.  *winch*
+  synthesizes the full file as ~FROM {parent[image]}~ followed by the body.
+- ~containerfile~ :: a full ~Containerfile~ used verbatim (the "escape hatch").
+  Use this for *base* layers (which have no parent) and for multi-stage builds.
+- ~provides~ / ~requires~ :: capability tag lists (see [[Capabilities]]).
+- ~image~ :: optional, overrides the auto-generated image name (see [[Image naming and labels]]).
+
+A *base* layer has no parent so it must supply its own ~FROM~ via
+~containerfile~:
+
+#+begin_src toml
+[layer.debian]
+release = "bookworm"
+provides = ["os:debian", "pkg-mgr:apt"]
+containerfile = "FROM debian:{release}\n"
+#+end_src
+
+A *body* layer omits ~FROM~; *winch* injects it:
+
+#+begin_src toml
+[layer.spack]
+version = "v1.1.0"
+requires = ["os:debian|os:alma"]
+provides = ["spack"]
+body = """
+RUN git clone --branch {version} --depth=2 https://github.com/spack/spack.git
+RUN /spack/bin/spack compiler find
+RUN /spack/bin/spack bootstrap now
+"""
+#+end_src
+
+String values are interpolated with Python ~{format}~ markup.  A layer may
+reference its own variables (/eg/ ~{version}~) and, via the implicit ~parent~
+mapping, the *immediate* parent's resolved variables (/eg/ ~{parent[image]}~).
+There is no access to grandparents or other ancestors.  To write a literal brace
+(/eg/ a shell ~${VAR}~) double it: ~${{VAR}}~.
+
+Note there are *no list-valued variant parameters* in this paradigm (lists are
+reserved for ~provides~/~requires~).  Variation is expressed by recipe overrides
+instead (see [[Recipes]]).
+
+** Capabilities
+
+Free composition needs a way to express that not every layer fits on every
+other (an ~apt~ layer is nonsense on AlmaLinux).  Each layer may declare:
+
+- ~provides~ :: capability tags the layer adds to the stack.
+- ~requires~ :: capability tags the layer needs from the stack *below* it.
+
+When a recipe is realized, *winch* walks the stack from base to top accumulating
+the union of ~provides~.  Before a layer's own ~provides~ are added, each of its
+~requires~ entries must be satisfied by what lies below:
+
+- An entry with no ~|~ is satisfied by an exact match in the available set.
+- An entry containing ~|~ is an *OR* alternation, satisfied if *any*
+  ~|~-separated alternative is available, /eg/ ~"os:debian|os:alma"~.
+- All entries must be satisfied (*AND* across entries).
+
+Capability strings are themselves ~{format}~-interpolated, so a layer may
+~provides = ["pkg:gcc@{version}"]~.  Validation happens *before any podman call*;
+an incompatible stack fails fast:
+
+#+begin_example
+recipe "phlex-alma" layer "debian_base" requires "os:debian" but the stack
+below provides ['os:alma', ...]
+#+end_example
+
+A layer with no ~requires~ composes onto anything.
+
+** Recipes
+
+A recipe is declared with a ~[recipe.NAME]~ table.
+
+- ~stack~ :: an ordered list of layer names, base first.  Defaults to the empty
+  list.
+- A *layer-qualified variable* of the form ~LAYER.VAR = value~ overrides variable
+  ~VAR~ of layer ~LAYER~.
+- ~recipe_base~ :: a recipe name or list of recipe names to inherit from (see
+  [[Recipe inheritance]]).
+
+#+begin_src toml
+[recipe.debian]
+stack = ["debian", "debian_base"]
+debian.release = "trixie"          # override the layer's default
+#+end_src
+
+*** Recipe inheritance
+
+~recipe_base~ lets recipes share structure.  Resolution proceeds in two parts:
+
+1. *Stack concatenation* :: the effective stack is the concatenation of each
+   base's fully-resolved stack, in ~recipe_base~ order, followed by this recipe's
+   own ~stack~.
+
+2. *Variable resolution* :: layer-qualified variables are collected from the
+   bases in order, then this recipe, then any command-line ~--set~ overrides.
+   Later settings win (last-wins per ~LAYER.VAR~).  Layer defaults are the lowest
+   precedence.
+
+Cycles among ~recipe_base~ references are detected and reported.
+
+This allows a single shared stack to be combined with different bases:
+
+#+begin_src toml
+# A reusable, OS-agnostic stack (a partial base: not built on its own).
+[recipe.phlex-stack]
+stack = ["spack", "spack_gcc", "spack_phlex"]
+spack.version = "v1.1.0"
+spack_gcc.version = "14"
+spack_phlex.version = "0.1.0"
+
+# Compose an OS base recipe with the shared stack via multi-base inheritance.
+[recipe.phlex-debian]
+recipe_base = ["debian", "phlex-stack"]
+
+[recipe.phlex-alma]
+recipe_base = ["alma", "phlex-stack"]
+#+end_src
+
+The effective stack of ~phlex-debian~ is then ~debian~ + ~debian_base~ + ~spack~ +
+~spack_gcc~ + ~spack_phlex~.
+
+*** Anonymous recipes and ~--set~
+
+A recipe need not exist in the configuration at all.  An *anonymous* recipe is
+given on the command line with ~--stack~:
+
+#+begin_example
+$ winch recipe --stack debian,spack
+#+end_example
+
+Layer variables may be overridden from the command line with repeated ~--set~,
+which has the highest precedence and works for both named and anonymous recipes:
+
+#+begin_example
+$ winch recipe --stack debian,spack --set debian.release=trixie --set spack.version=v1.1.0
+$ winch recipe phlex-debian --set spack.version=v1.2.0
+#+end_example
+
+** Image naming and labels
+
+When a layer does not set ~image~ explicitly, *winch* names the built image
+deterministically from a content *digest*:
+
+#+begin_example
+localhost/winch/<layer>:<12-hex-digest>
+#+end_example
+
+The digest is computed over the resolved instance data (excluding the image name
+itself) and embeds the parent's image, so it *chains* down the stack.  A welcome
+consequence is that identical stack *prefixes* across different recipes produce
+identical digests and therefore *build only once*.
+
+Each built image also carries provenance as OCI labels:
+
+- ~winch.layer~ :: the layer name.
+- ~winch.digest~ :: the full content digest.
+- ~winch.var.<KEY>~ :: each resolved layer variable.
+- ~winch.provides~ :: the layer's (comma-joined) provided capabilities.
+
+These are recoverable with ~podman inspect~.
+
+** Commands
+
+The new paradigm is driven by ~winch recipe~ for building and by the familiar
+~list~, ~dot~ and ~render~ commands for inspection.  Each accepts a *recipe
+selector*: a positional recipe ~NAME~, or ~--stack~ (with optional ~--set~).
+
+*** winch recipe
+
+~winch recipe~ is the build analog of the original ~winch build~.  It resolves
+the recipe, validates [[Capabilities]], generates the instance chain and builds the
+images in dependency order, applying the provenance labels described above.  It
+accepts the same ~-r/--rebuild~, ~-f/--force~ and ~-o/--outpath~ options as
+~build~.
+
+#+begin_example
+$ export WINCH_CONFIG=/path/to/winch/example/phlex2.toml
+$ winch recipe phlex-debian
+$ winch recipe --stack debian,debian_base,spack --set spack.version=v1.2.0
+#+end_example
+
+Give *either* a ~NAME~ *or* ~--stack~, not both.
+
+*** winch list
+
+With no selector, ~winch list~ enumerates the defined layers and recipes:
+
+#+begin_example
+$ winch list
+layer alma
+layer debian
+...
+recipe phlex-alma
+recipe phlex-debian
+recipe phlex-stack
+#+end_example
+
+With a selector it lists the resolved instance chain, honoring ~-t/--template~:
+
+#+begin_example
+$ winch list phlex-debian -t '{kind} {image}'
+debian localhost/winch/debian:af03abe524ba
+debian_base localhost/winch/debian_base:1ba677872288
+spack localhost/winch/spack:7182c97a0b17
+spack_gcc localhost/winch/spack_gcc:36d215d59030
+spack_phlex localhost/winch/spack_phlex:57a0cc761ba0
+#+end_example
+
+*** winch dot
+
+~winch dot~ emits a GraphViz graph of the resolved chain(s).  With no selector it
+shows the union of all named recipes (recipes that cannot be realized on their
+own, such as a partial ~recipe_base~ like ~phlex-stack~, are skipped with a
+warning).
+
+#+begin_example
+$ winch dot phlex-debian -o phlex2.dot
+$ dot -Tsvg -o phlex2.svg phlex2.dot
+#+end_example
+
+*** winch render
+
+~winch render~ writes templated output over the resolved instances, just as for
+the original paradigm but recipe-driven.  For example, to materialize the
+generated ~Containerfile~ files without building:
+
+#+begin_example
+$ winch render phlex-debian -T containerfile -o 'ctx/{kind}/Containerfile'
+#+end_example
 
 
 * Usage tips
