@@ -138,6 +138,31 @@ def test_layer_provides_bad_element():
         parse_layer("x", {"provides": ["ok", 5]})
 
 
+def test_layer_provides_bad_type():
+    # neither string nor list
+    with pytest.raises(ConfigError):
+        parse_layer("x", {"provides": 5})
+
+
+def test_layer_body_must_be_string():
+    with pytest.raises(ConfigError) as ei:
+        parse_layer("x", {"body": 5})
+    assert "body" in str(ei.value)
+
+
+def test_layer_containerfile_must_be_string():
+    with pytest.raises(ConfigError) as ei:
+        parse_layer("x", {"containerfile": 5})
+    assert "containerfile" in str(ei.value)
+
+
+def test_layer_dict_variable_rejected():
+    # a non-special key with a (sub-table) dict value is not a scalar
+    with pytest.raises(ConfigError) as ei:
+        parse_layer("x", {"sub": {"a": 1}})
+    assert "sub" in str(ei.value)
+
+
 # --- recipe parsing ---------------------------------------------------------
 
 def test_parse_recipe_full():
@@ -195,6 +220,18 @@ def test_recipe_bad_scalar_key_is_error():
 def test_recipe_stack_must_be_list():
     with pytest.raises(ConfigError):
         parse_recipe("r", {"stack": "debian"})
+
+
+def test_recipe_stack_element_must_be_string():
+    with pytest.raises(ConfigError) as ei:
+        parse_recipe("r", {"stack": [1, 2]})
+    assert "layer names" in str(ei.value)
+
+
+def test_recipe_override_value_must_be_scalar():
+    with pytest.raises(ConfigError) as ei:
+        parse_recipe("r", {"spack": {"version": [1, 2]}})
+    assert "spack.version" in str(ei.value)
 
 
 # --- cross-references -------------------------------------------------------

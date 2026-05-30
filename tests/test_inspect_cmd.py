@@ -158,3 +158,16 @@ def test_render_anonymous_stack_literal_template():
 def test_render_requires_template():
     res, _ = invoke(NEW_CFG, "render", "phlex")
     assert res.exit_code != 0
+
+
+def test_render_missing_template_attribute_skips():
+    res, _ = invoke(NEW_CFG, "render", "phlex", "-T", "nope", "-o", "out/{kind}.txt")
+    assert res.exit_code == 0, res.output
+    assert "no template attribute" in res.output
+
+
+def test_dot_bad_set_errors():
+    # a malformed --set (no '=') is reported as a config error
+    res, _ = invoke(NEW_CFG, "dot", "phlex", "--set", "badformat")
+    assert res.exit_code != 0
+    assert "badformat" in res.output

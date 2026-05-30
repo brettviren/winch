@@ -7,7 +7,7 @@ Test winch.recipe resolution and recipe_base inheritance
 import tomllib
 import pytest
 
-from winch.config import parse, ConfigError
+from winch.config import parse, ConfigError, Layer, Recipe
 from winch.recipe import resolve, parse_set_overrides
 
 
@@ -270,3 +270,13 @@ def test_requires_exactly_one_selector():
         resolve(layers, recipes)
     with pytest.raises(ValueError):
         resolve(layers, recipes, name="r", stack=["debian"])
+
+
+def test_resolve_chain_guards_unknown_base():
+    # parse() normally validates recipe_base targets, but resolve() guards too
+    # for direct API use with hand-built recipes.
+    layers = {"x": Layer(name="x", containerfile="FROM x\n")}
+    recipes = {"r": Recipe(name="r", recipe_base=["ghost"], stack=["x"])}
+    with pytest.raises(ConfigError) as ei:
+        resolve(layers, recipes, name="r")
+    assert "ghost" in str(ei.value)

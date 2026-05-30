@@ -155,3 +155,34 @@ def test_capability_failure_aborts_before_build(stub_podman):
     assert "os:debian" in res.output
     # nothing built
     assert stub_podman == []
+
+
+# --- rebuild / force / empty branches ---------------------------------------
+
+def test_empty_recipe_warns_no_build(stub_podman):
+    cfg = NEW_CFG + "\n[recipe.empty]\nstack = []\n"
+    res = run(cfg, "empty")
+    assert res.exit_code == 0, res.output
+    assert "no layers to build" in res.output
+    assert stub_podman == []
+
+
+def test_rebuild_none_skips_existing(stub_podman, monkeypatch):
+    monkeypatch.setattr(cli_mod, "image_exists", lambda name: True)
+    res = run(NEW_CFG, "r", "-r", "none")
+    assert res.exit_code == 0, res.output
+    assert "not rebuilding existing image" in res.output
+    assert stub_podman == []
+
+
+def test_force_removes_existing_and_no_cache(stub_podman, monkeypatch):
+    removed = []
+    monkeypatch.setattr(cli_mod, "image_exists", lambda name: True)
+    monkeypatch.setattr(cli_mod, "remove_image",
+                        lambda name: removed.append(name) or True)
+    res = run(NEW_CFG, "r", "-f", "all")
+    assert res.exit_code == 0, res.output
+    assert len(removed) == 2                 # both layers force-removed
+    assert len(stub_podman) == 2
+    for _image, _cpath, a in stub_podman:
+        assert "--no-cache" in a
