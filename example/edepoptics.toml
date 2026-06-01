@@ -61,23 +61,37 @@ RUN /spack/bin/spack bootstrap now
 """
 
 
-[eodev]
+[standalone_eicopticks]
 parent_kind = ["spack_base"]
-image = '{parent[image]}-eodev-{version}'
-label = '{parent[label]} eodev {version}'
+image = '{parent[image]}-standalone-eicopticks-{version}'
+label = '{parent[label]} standalone eicopticks {version}'
 version = ['main']
 containerfile = """
 FROM {parent[image]}
 
-COPY edep-opticks-spack.tar.gz .
-RUN ls -l edep-opticks-spack.tar.gz
-
-RUN tar -xzf edep-opticks-spack.tar.gz
+## requires manual tar + copy into winch-contexts
+# COPY edep-opticks-spack.tar.gz .
+# RUN tar -xzf edep-opticks-spack.tar.gz
+RUN git clone https://github.com/WireCell/edep-opticks-spack.git
 RUN /spack/bin/spack repo add edep-opticks-spack/edep_opticks/
-RUN /spack/bin/spack info eicopticks
-RUN /spack/bin/spack spec eicopticks@{version}
+
 RUN /spack/bin/spack install --only dependencies eicopticks@{version} cuda_arch=89
 RUN /spack/bin/spack install eicopticks@{version} cuda_arch=89
+"""
+
+[standalone_edepsim]
+parent_kind = ["spack_base"]
+image = '{parent[image]}-standalone-edepsim-{version}'
+label = '{parent[label]} standalone edepsim {version}'
+version = ['master']
+containerfile = """
+FROM {parent[image]}
+
+RUN git clone https://github.com/WireCell/edep-opticks-spack.git
+RUN /spack/bin/spack repo add edep-opticks-spack/edep_opticks/
+
+RUN /spack/bin/spack install --only dependencies edepsim@{version}
+RUN /spack/bin/spack install edepsim@{version}
 """
 
 
@@ -97,47 +111,27 @@ RUN /spack/bin/spack info eicopticks
 #
 # Note: we have to figure out how we will integrate edep-sim + eic-opticks.
 #
-# Option A: hard-wire edep-sim to depend on eic-opticks as compile-time option.
+# Option A: "hack" hard-wire edep-sim to depend on eic-opticks as compile-time option.
 #
-# Option B: add plugin pattern to edep-sim and provide "edep-opticks" plugin that depends on both packages.
+# Option B: "plugin" Develop a 3rd package with an "optical plugin" to house the
+# interface and a 4th to provide a plugin implemented on eic-opticks, and one in
+# edep-sim implementing vanilla G4.
 #
-# Option C: Develop an "optical plugin" package to house the interface.  
-#
-# For now, reflect the fact that two packages are disjoint
+# Start with assuming "hack" option.
 
-
-
-# I do not have a good way to combine different versions here.  A hack is to
-# hard-wire version "ma" and complete the string in the containerfile template.
-
-[dependencies]
-parent_kind = ["spack_repos"]
-image = '{parent[image]}-deps-{version}'
-label = '{parent[label]} deps {version}'
-version = ['ma']  
+# The base for "hack" option.  Note, the dependency on eicopticks must go into
+# edepsim/package.py if we make it permanent.
+[edepsim_on_eicopticks]
+parent_kind = ["standalone_eicopticks"]
+image = '{parent[image]}-edepsim-on-eicopticks-{version}'
+label = '{parent[label]} edepsim on eicopticks {version}'
+version = ['master']
 containerfile = """
 FROM {parent[image]}
-RUN /spack/bin/spack install --only dependencies edepsim@{version}ster
-RUN /spack/bin/spack install --only dependencies eicopticks@{version}in cuda_arch=89
+
+RUN /spack/bin/spack install --only dependencies edepsim@{version} ^eicopticks
+RUN /spack/bin/spack install edepsim@{version} ^eicopticks
 """
 
-[edepsim]
-parent_kind = ["dependencies"]
-image = '{parent[image]}-edepsim-{version}'
-label = '{parent[label]} edepsim {version}'
-version = ['master']  
-containerfile = """
-FROM {parent[image]}
-RUN /spack/bin/spack install edepsim@{version}
-"""
 
-[eicopticks]
-parent_kind = ["dependencies"]
-image = '{parent[image]}-eicopticks-{version}'
-label = '{parent[label]} eicopticks {version}'
-version = ['main']
-containerfile = """
-FROM {parent[image]}
-RUN /spack/bin/spack install eicopticks@{version} cuda_arch=89
-"""
 

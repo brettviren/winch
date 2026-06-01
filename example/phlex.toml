@@ -71,7 +71,7 @@ RUN /spack/bin/spack bootstrap now
 parent_kind = ["spack_base"]
 image = '{parent[image]}-gcc-{version}'
 label = '{parent[label]} GCC {version}'
-version = "14"
+version = "15"
 containerfile = """
 FROM {parent[image]}
 RUN /spack/bin/spack install -j 12 gcc@{version}
@@ -81,10 +81,11 @@ RUN /spack/bin/spack install -j 12 gcc@{version}
 parent_kind = ["spack_gcc"]
 image = '{parent[image]}-phlex-{version}'
 label = '{parent[label]} PHLEX {version}'
-version = "0.1.0"
+version = ["0.1.0", "0.2.0"]
 containerfile = """
 FROM {parent[image]}
 RUN /spack/bin/spack repo add https://github.com/FNALssi/fnal_art.git
 RUN /spack/bin/spack repo add https://github.com/Framework-R-D/phlex-spack-recipes.git
-RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j 12 phlex %gcc@14"
+RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j 12 phlex@{version}%gcc@{parent[version]}"
 """
+
