@@ -118,14 +118,13 @@ def self_format(dat: dict, return_changed=False, ignore_errors = False) -> dict:
             # Actually try to format
             try:
                 newv = v.format_map(SafeDict(**dat))
-            except TypeError as err:
-                # warn(f'self_format type error with key "{k}":\n{err}')
-                # raise
-
-                ## This comes from, eg '{parent[release]}' when 'parent' is not
-                ## defined eg in A-nodes.  It may be added later, eg for
-                ## I-nodes.  Following "ignore what you don't know" philosophy
-                ## we, err, ignore....
+            except (TypeError, AttributeError):
+                # TypeError: e.g. '{parent[release]}' when 'parent' is absent
+                # (SafeDict returns '{parent}', then '{parent}'['release'] fails).
+                # AttributeError: e.g. '{requires.spack.name}' when 'requires'
+                # is absent (SafeDict returns '{requires}', then attribute
+                # access on that string fails).  Both cases follow the same
+                # "ignore what you don't know" philosophy.
                 continue
             except KeyError as err:
                 errors.add(f'format error with key "{k}" and string "{v}", missing: {err}.  Check your config.')

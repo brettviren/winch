@@ -34,8 +34,11 @@ parameters.
 
 '''
 
+import re
+
 from .util import debug, digest, outer_product, self_format, product, find_unresolved
 from .config import ConfigError
+from .recipe import _resolve_caps
 import networkx as nx
 
 
@@ -45,6 +48,89 @@ WINCH_IMAGE_PREFIX = "localhost/winch"
 WINCH_IMAGE_DIGEST_LEN = 12
 # Instance-data keys created by build_instance that are not layer variables.
 INSTANCE_STRUCTURAL_KEYS = ("kind", "parent", "containerfile", "image")
+
+# Match {layer.NAME.VAR} — negative lookbehind prevents matching {{layer.
+_LAYER_REF_RE = re.compile(
+    r'(?<!\{)\{layer\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\}'
+)
+# Match {requires.NAME.VAR} — same escaped-brace guard.
+_REQUIRES_REF_RE = re.compile(
+    r'(?<!\{)\{requires\.([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\}'
+)
+
+
+def _expand_cross_layer_refs(idata, current_layer_name, recipe_name,
+                              layer_obj, prior_stack, raw_vars):
+    '''
+    Pre-expand {layer.NAME.VAR} and {requires.NAME.VAR} references in idata.
+
+    Must be called before self_format so that the expanded literals are then
+    available to the normal {varname} / {parent[varname]} resolution pass.
+    Mutates idata string values in place.  Raises ConfigError on any
+    unresolvable cross-layer reference.
+
+    prior_stack  — list of (layer_name, resolved_vars_dict, provides_set) for
+                   every layer that has already been processed (base-first).
+    raw_vars     — the merged-but-unformatted variable map for the current
+                   layer; used only to format its requires list for matching.
+    '''
+    prior_by_name = {name: pvars for name, pvars, _ in prior_stack}
+
+    def expand_layer(m):
+        lname, vname = m.group(1), m.group(2)
+        if lname not in prior_by_name:
+            raise ConfigError(
+                f'recipe "{recipe_name}" layer "{current_layer_name}": '
+                f'{{layer.{lname}.{vname}}} references "{lname}" which is '
+                f'not a prior layer in the stack')
+        pvars = prior_by_name[lname]
+        if vname not in pvars:
+            raise ConfigError(
+                f'recipe "{recipe_name}" layer "{current_layer_name}": '
+                f'{{layer.{lname}.{vname}}} - layer "{lname}" has no '
+                f'variable "{vname}"')
+        return str(pvars[vname])
+
+    # Build requires_vars: identifier-capable requirement → providing layer vars.
+    # Scan prior_stack forward (base → current); later entries overwrite earlier
+    # ones so the highest layer in the stack wins when multiple layers provide
+    # the same capability.
+    formatted_requires = set(_resolve_caps(layer_obj.requires, raw_vars))
+    requires_vars = {}
+    for _pname, pvars, pprovides in prior_stack:
+        for cap in pprovides:
+            if cap in formatted_requires and cap.isidentifier():
+                requires_vars[cap] = pvars
+
+    def expand_requires(m):
+        rname, vname = m.group(1), m.group(2)
+        if rname not in formatted_requires:
+            raise ConfigError(
+                f'recipe "{recipe_name}" layer "{current_layer_name}": '
+                f'{{requires.{rname}.{vname}}} - "{rname}" is not in '
+                f'this layer\'s requires list')
+        if rname not in requires_vars:
+            raise ConfigError(
+                f'recipe "{recipe_name}" layer "{current_layer_name}": '
+                f'{{requires.{rname}.{vname}}} - no prior layer provides '
+                f'"{rname}"')
+        pvars = requires_vars[rname]
+        if vname not in pvars:
+            raise ConfigError(
+                f'recipe "{recipe_name}" layer "{current_layer_name}": '
+                f'{{requires.{rname}.{vname}}} - the providing layer has '
+                f'no variable "{vname}"')
+        return str(pvars[vname])
+
+    for k in list(idata.keys()):
+        v = idata[k]
+        if not isinstance(v, str):
+            continue
+        if _LAYER_REF_RE.search(v):
+            idata[k] = _LAYER_REF_RE.sub(expand_layer, v)
+            v = idata[k]
+        if _REQUIRES_REF_RE.search(v):
+            idata[k] = _REQUIRES_REF_RE.sub(expand_requires, v)
 
 
 def instance_labels(node, idata, provides=()):
@@ -130,9 +216,18 @@ def generate_instances(layers, resolved_recipes, graph=None):
     for rr in resolved_recipes:
         parent_idata = None
         parent_inode = None
+        # Accumulate (layer_name, resolved_vars, provides_set) for cross-layer refs.
+        prior_stack = []
+
         for layer_name in rr.stack:
             layer = layers[layer_name]
             idata = build_instance(layer, rr.layer_vars[layer_name], parent_idata)
+
+            # Pre-expand {layer.NAME.VAR} and {requires.NAME.VAR} before the
+            # normal self_format pass handles {varname} / {parent[varname]}.
+            _expand_cross_layer_refs(
+                idata, layer_name, rr.name, layer,
+                prior_stack, rr.layer_vars[layer_name])
 
             # Capture original string values (escapes intact) for the resolution
             # check, then self-format in place.
@@ -155,6 +250,13 @@ def generate_instances(layers, resolved_recipes, graph=None):
                 I.add_node(inode, **idata)
             if parent_inode is not None:
                 I.add_edge(parent_inode, inode)
+
+            # Record this layer's resolved variables and formatted provides for
+            # {layer.NAME.VAR} / {requires.NAME.VAR} resolution in later layers.
+            resolved_vars = {k: v for k, v in idata.items()
+                             if k not in INSTANCE_STRUCTURAL_KEYS}
+            provides = set(_resolve_caps(layer.provides, resolved_vars))
+            prior_stack.append((layer_name, resolved_vars, provides))
 
             parent_idata = idata
             parent_inode = inode
