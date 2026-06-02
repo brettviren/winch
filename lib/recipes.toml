@@ -1,0 +1,47 @@
+# winch -c layers.toml -c recipes.toml <recipe>
+
+[recipe.debian_dev]
+stack = ["network_local", "host_big", "debian", "debian_dev"]
+
+[recipe.alma_dev]
+stack = ["network_local", "host_big", "alma", "alma_dev"]
+
+[recipe.spack_build]
+stack = ["spack", "spack_compiler"]
+
+[recipe.debian_spack_gcc]
+recipe_base = ["debian_dev", "spack_build"]
+
+
+[recipe.spack_phlex]
+recipe_base = "spack_build"
+stack = ["spack_phlex_repos", "spack_phlex"]
+
+[recipe.spack_wirecell]
+recipe_base = "spack_build"
+stack = ["spack_wirecell_repos", "spack_wirecell"]
+
+[recipe.debian_spack_phlex]
+recipe_base = ["debian_dev", "spack_phlex"]
+
+[recipe.alma_spack_phlex]
+recipe_base = ["alma_dev", "spack_phlex"]
+
+[recipe.debian_spack_wirecell]
+recipe_base = ["debian_dev", "spack_wirecell"]
+
+[recipe.alma_spack_wirecell]
+recipe_base = ["alma_dev", "spack_wirecell"]
+
+[recipe.spack_wct_phlex]
+recipe_base = "spack_build"
+stack = ["spack_wirecell_repos", "spack_phlex_repos", "spack_wct_phlex_env"]
+
+[recipe.debian_spack_wct_phlex]
+recipe_base = ["debian_dev", "spack_wct_phlex"]
+# spack.buildcache_mirror = "oci://ghcr.io/yourorg/spack-cache"
+# or: winch recipe debian_spack_wct_phlex --set spack.buildcache_mirror=oci://...
+# or: spack.buildcache_mirror = "file:///big/disk/spack-cache"
+
+[recipe.alma_spack_wct_phlex]
+recipe_base = ["alma_dev", "spack_wct_phlex"]

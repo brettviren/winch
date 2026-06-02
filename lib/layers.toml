@@ -1,0 +1,176 @@
+# This file is winch/lib/layers.toml part of the Winch project.  It provides a
+# set of container image layers that can be composed via a winch recipe.  See
+# recipes.toml.  It collects layers relevant to Wire-Cell Toolkit and adjacent
+# work.  It can be used as a starting point or to provide examples for other
+# domains.
+
+# Rules for layers here:
+#
+# - any layer that uses a special user will switching back to root before finishing.
+# 
+# - any layer that sets WORKDIR internaly will set it back to "/" before finishing.
+
+
+### Define some abstract network locations and hosts
+
+[layer.network_local]
+description = "Network services provided locally"
+provides = ["network"]
+# run spack-mirror-server /path/to/spack-cache --port 8080
+spack_cache = "http://host.containers.internal:8080"
+
+[layer.host_small]
+description = "A small build host"
+ncpu = "2"
+provides = ["host"]
+
+[layer.host_big]
+description = "A large build host"
+ncpu = "12"
+provides = ["host"]
+
+### Define base OS layers
+
+[layer.debian]
+release = "bookworm"
+provides = ["os:debian", "pkg-mgr:apt"]
+containerfile = "FROM debian:{release}\n"
+
+[layer.alma]
+release = "9"
+provides = ["os:alma", "pkg-mgr:dnf"]
+containerfile = "FROM almalinux:{release}\n"
+
+
+[layer.debian_dev]
+description = "Install a minimal package set to support C++/Python development."
+requires = ["os:debian"]
+provides = ["devtools", "uv"]
+body = """
+RUN apt-get update \
+    && \
+    apt-get install -y \
+    autoconf bash build-essential ca-certificates clang coreutils curl direnv \
+    emacs fd-find gfortran git gpg jq less llvm locales lsb-release man-db \
+    python-is-python3 python3 python3-click python3-setuptools python3-venv \
+    python3-yaml ripgrep sudo unzip wget zip zlib1g-dev \
+    && \
+    apt-get clean
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+"""
+
+[layer.alma_dev]
+description = "Install a minimal package set to support C++/Python development."
+requires = ["os:alma"]
+provides = ["devtools", "uv"]
+body = """
+RUN dnf install -y epel-release && dnf clean all
+RUN dnf install -y \
+    autoconf bash ca-certificates clang coreutils curl direnv \
+    emacs fd-find gcc gcc-c++ gcc-gfortran glibc-devel git gnupg2 jq less \
+    glibc-langpack-en llvm make man-db redhat-lsb-core \
+    python3 python3-click python3-pyyaml python3-setuptools python3-virtualenv \
+    python-unversioned-command ripgrep sudo unzip wget zip zlib-devel \
+    && \
+    dnf clean all
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+"""
+
+[layer.spack]
+description = "Provide a Spack install under /spack with everything owned by user spack."
+requires = ["os:debian|os:alma", "network"]
+provides = ["spack"]
+version = "v1.1.0"
+buildcache_mirror = "{requires.network.spack_cache}"
+body = """
+RUN git clone --branch {version} --depth=2 https://github.com/spack/spack.git /spack
+RUN useradd -c 'Spack Packages' -d /spack -s /bin/bash spack
+RUN chown -R spack:spack /spack
+USER spack
+WORKDIR /spack
+RUN /spack/bin/spack config add 'packages:all:target:[x86_64]'
+RUN /spack/bin/spack config add 'config:install_tree:padded_length:128'
+RUN /spack/bin/spack compiler find
+RUN /spack/bin/spack bootstrap now
+RUN bash -c 'test -z "{buildcache_mirror}" || /spack/bin/spack mirror add --unsigned buildcache {buildcache_mirror}'
+USER root
+WORKDIR /
+"""
+
+
+# Fixme: make it so we may provide a layer.host, define 'ncpus = 12' and use "{host.cpus}" in this body.
+
+[layer.spack_compiler]
+description = "Build a compiler with Spack."
+version = "15"
+package = "gcc"
+provides = ["compiler"]
+requires = ["spack", "host"]
+body = """
+USER spack
+RUN echo "added to force rebuild of next line"
+RUN /spack/bin/spack install -j {requires.host.ncpu} {package}@{version}
+USER root
+"""
+
+[layer.spack_wirecell_repos]
+description = "Provide Spack repos for Wire-Cell Toolkit"
+provides = ["spack_wirecell_repos"]
+requires = ["spack"]
+body = """
+USER spack
+RUN /spack/bin/spack repo add https://github.com/wirecell/wire-cell-spack.git
+USER root
+"""
+
+[layer.spack_wirecell]
+description = "Provide spack-build of Wire-Cell Toolkit"
+provides = ["spack_wirecell"]
+requires = ["compiler", "host", "spack_wirecell_repos"]
+version = "0.28.0"  # update to desired wirecell version
+body = """
+USER spack
+RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j {requires.host.ncpu} wirecell@{version}%{requires.compiler.package}@{requires.compiler.version}"
+USER root
+"""
+
+
+[layer.spack_phlex_repos]
+description = "Provide Spack repos for Phlex."
+provides = ["spack_phlex_repos"]
+requires = ["spack"]
+body = """
+USER spack
+RUN /spack/bin/spack repo add https://github.com/FNALssi/fnal_art.git
+RUN /spack/bin/spack repo add https://github.com/Framework-R-D/phlex-spack-recipes.git
+USER root
+"""
+
+[layer.spack_phlex]
+description = "Provide spack-build of Phlex."
+provides = ["spack_phlex"]
+requires = ["compiler", "host", "spack_phlex_repos"]
+version = "0.2.0"
+body = """
+USER spack
+RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j {requires.host.ncpu} phlex@{version}%{requires.compiler.package}@{requires.compiler.version}"
+USER root
+"""
+
+
+[layer.spack_wct_phlex_env]
+description = "Build Wire-Cell Toolkit and Phlex together in a shared Spack environment."
+provides = ["spack_wct_phlex"]
+requires = ["compiler", "host", "spack_wirecell_repos", "spack_phlex_repos"]
+wirecell_version = "0.28.0"  # update to desired wirecell version
+phlex_version = "0.2.0"
+env_name = "wct-phlex"
+body = """
+USER spack
+RUN /spack/bin/spack env create {env_name}
+RUN /spack/bin/spack -e {env_name} add wirecell@{wirecell_version}%{requires.compiler.package}@{requires.compiler.version}
+RUN /spack/bin/spack -e {env_name} add phlex@{phlex_version}%{requires.compiler.package}@{requires.compiler.version}
+RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
+RUN cp /spack/var/spack/environments/{env_name}/spack.lock /{env_name}-spack.lock
+USER root
+"""
