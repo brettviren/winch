@@ -33,6 +33,8 @@ MODE="find"                                                  # find | env
 SPACK_ENV=""                                                 # used when MODE=env
 ALL=0                                                        # find: skip fzf, push all
 LIST_USER="${SPACK_LIST_USER:-spack}"                        # user for the listing run
+PUSH_USER="${SPACK_PUSH_USER:-spack}"                        # user for the push run
+USERNS="${SPACK_USERNS:-auto}"                              # podman --userns for push
 DRY_RUN=0
 
 usage() {
@@ -67,6 +69,15 @@ Options:
                         (default: $LIST_USER; empty => container default).
                         Uses the build-time Spack user so its bootstrap cache
                         is reused, avoiding a slow re-bootstrap as root.
+      --push-user USER  Run the push container as USER (default: $PUSH_USER;
+                        empty => container default).  Same bootstrap-reuse
+                        benefit as --list-user.
+      --userns SPEC     podman --userns for the push (default: $USERNS).
+                        "auto" maps the host user running this script onto the
+                        push user inside the image (keep-id), so cache files
+                        are owned by the caller while the process still runs
+                        as the push user.  Pass a literal SPEC to override, or
+                        "" to omit --userns entirely.  podman only.
   -n, --dry-run         Print the command instead of running it.
   -h, --help            Show this help.
 
@@ -89,6 +100,8 @@ while [[ $# -gt 0 ]]; do
         -e|--env)     SPACK_ENV="$2"; MODE="env"; shift 2 ;;
         -a|--all)     ALL=1;            shift ;;
         --list-user)  LIST_USER="$2";   shift 2 ;;
+        --push-user)  PUSH_USER="$2";   shift 2 ;;
+        --userns)     USERNS="$2";      shift 2 ;;
         -n|--dry-run) DRY_RUN=1;        shift ;;
         -h|--help)    usage; exit 0 ;;
         --)           shift; PACKAGES+=("$@"); break ;;
@@ -299,10 +312,43 @@ case "$MODE" in
 esac
 
 # ---- Run --------------------------------------------------------------------
+# Run the push as the build-time Spack user by default, so its bootstrap
+# cache is reused (no re-bootstrap delay).
+push_user_args=()
+[[ -n "$PUSH_USER" ]] && push_user_args=(--user "$PUSH_USER")
+
+# Resolve --userns.  "auto" => keep-id mapping the host user (whoever runs
+# this script) onto the push user's uid/gid *inside the image* (queried, not
+# hardcoded), so files written to the bind-mounted cache are owned by the
+# caller on the host while the process runs as the push user.  podman only.
+userns_args=()
+userns_show="(none)"
+if [[ -n "$PUSH_USER" && -n "$USERNS" ]]; then
+    if [[ "$USERNS" == auto ]]; then
+        if [[ "$CONTAINER" == *podman* ]]; then
+            _ids=()
+            mapfile -t _ids < <("$CONTAINER" run --rm --user "$PUSH_USER" \
+                "$IMAGE" sh -c 'id -u; id -g' 2>/dev/null) || true
+            if [[ "${_ids[0]:-}" =~ ^[0-9]+$ && "${_ids[1]:-}" =~ ^[0-9]+$ ]]; then
+                userns_args=(--userns "keep-id:uid=${_ids[0]},gid=${_ids[1]}")
+                userns_show="keep-id:uid=${_ids[0]},gid=${_ids[1]}"
+            else
+                echo "Warning: could not read $PUSH_USER uid/gid from $IMAGE;" \
+                     "omitting --userns (cache files may be owned by a subuid)." >&2
+            fi
+        fi
+    else
+        userns_args=(--userns "$USERNS")
+        userns_show="$USERNS"
+    fi
+fi
+
 echo "Container : $CONTAINER"
 echo "Image     : $IMAGE"
 echo "Cache host: $CACHE_HOST"
 echo "Mount     : $CACHE_MOUNT"
+echo "Push user : ${PUSH_USER:-default user}"
+echo "Push userns: $userns_show"
 echo "Mode      : $MODE"
 case "$MODE" in
     find)
@@ -317,6 +363,8 @@ esac
 echo
 
 CMD=( "$CONTAINER" run --rm
+      "${push_user_args[@]}"
+      "${userns_args[@]}"
       -v "${CACHE_HOST}:${CACHE_MOUNT}"
       "$IMAGE"
       bash -c "$INNER" )
