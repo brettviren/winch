@@ -92,7 +92,12 @@ RUN /spack/bin/spack config add 'packages:all:target:[x86_64]'
 RUN /spack/bin/spack config add 'config:install_tree:padded_length:128'
 RUN /spack/bin/spack compiler find
 RUN /spack/bin/spack bootstrap now
+
+# See spack-buildcache-push.sh for all-in-one way to fill a cache from a spack install area in a container.
 RUN bash -c 'test -z "{buildcache_mirror}" || /spack/bin/spack mirror add --unsigned buildcache {buildcache_mirror}'
+
+# Add this explicitly and globally to avoid it being triggered each time the layer is used.
+RUN git clone --depth=1 -b releases/v2025.11.0 https://github.com/spack/spack-packages.git /spack/spack-packages    && /spack/bin/spack repo add --scope site /spack/spack-packages/repos/spack_repo/builtin    && rm -rf /spack/spack-packages/.git 
 USER root
 WORKDIR /
 """
@@ -108,7 +113,6 @@ provides = ["compiler"]
 requires = ["spack", "host"]
 body = """
 USER spack
-RUN echo "added to force rebuild of next line"
 RUN /spack/bin/spack install -j {requires.host.ncpu} {package}@{version}
 USER root
 """
