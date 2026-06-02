@@ -32,6 +32,7 @@ IMAGE=""                                                      # empty => auto-pi
 MODE="find"                                                  # find | env
 SPACK_ENV=""                                                 # used when MODE=env
 ALL=0                                                        # find: skip fzf, push all
+LIST_USER="${SPACK_LIST_USER:-spack}"                        # user for the listing run
 DRY_RUN=0
 
 usage() {
@@ -62,6 +63,10 @@ Options:
   -e, --env NAME|PATH   Spack environment to push (implies --mode env).
   -a, --all             find mode: push every installed package without the
                         interactive fzf picker.
+      --list-user USER  Run the package-listing container as USER
+                        (default: $LIST_USER; empty => container default).
+                        Uses the build-time Spack user so its bootstrap cache
+                        is reused, avoiding a slow re-bootstrap as root.
   -n, --dry-run         Print the command instead of running it.
   -h, --help            Show this help.
 
@@ -83,6 +88,7 @@ while [[ $# -gt 0 ]]; do
         --mode)       MODE="$2"; seen_positional=1; shift 2 ;;
         -e|--env)     SPACK_ENV="$2"; MODE="env"; shift 2 ;;
         -a|--all)     ALL=1;            shift ;;
+        --list-user)  LIST_USER="$2";   shift 2 ;;
         -n|--dry-run) DRY_RUN=1;        shift ;;
         -h|--help)    usage; exit 0 ;;
         --)           shift; PACKAGES+=("$@"); break ;;
@@ -204,12 +210,18 @@ for _, line in rows:
     print(line)
 PY
 
+    # Run the listing as the build-time Spack user (default "spack") so its
+    # bootstrap cache (~spack/.spack: package repo clone, clingo, ...) is
+    # reused.  Running as root instead would re-bootstrap on every invocation.
+    list_user_args=()
+    [[ -n "$LIST_USER" ]] && list_user_args=(--user "$LIST_USER")
+
     # Spack's 'python -c' compiles in single-statement mode and chokes on a
     # multi-line script, so pass a one-line '-c' that exec()s the real script
     # piped on stdin.  '-i' forwards our stdin into the container.
-    echo "Listing installed packages in $IMAGE ..." >&2
+    echo "Listing installed packages in $IMAGE (as ${LIST_USER:-default user}) ..." >&2
     pkg_table="$(printf '%s' "$PKG_LIST_PY" \
-        | "$CONTAINER" run --rm -i "$IMAGE" "$SPACK_BIN" python \
+        | "$CONTAINER" run --rm -i "${list_user_args[@]}" "$IMAGE" "$SPACK_BIN" python \
               -c 'import sys; exec(sys.stdin.read())')" || {
         echo "Error: failed to list packages from $IMAGE." >&2
         exit 1
