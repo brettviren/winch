@@ -96,8 +96,7 @@ RUN /spack/bin/spack bootstrap now
 # See spack-buildcache-push.sh for all-in-one way to fill a cache from a spack install area in a container.
 RUN bash -c 'test -z "{buildcache_mirror}" || /spack/bin/spack mirror add --unsigned buildcache {buildcache_mirror}'
 
-# Add this explicitly and globally to avoid it being triggered each time the layer is used.
-RUN git clone --depth=1 -b releases/v2025.11.0 https://github.com/spack/spack-packages.git /spack/spack-packages    && /spack/bin/spack repo add --scope site /spack/spack-packages/repos/spack_repo/builtin    && rm -rf /spack/spack-packages/.git 
+# Go back to root.  When doing spack things with this or other images, best to do so as user spack.
 USER root
 WORKDIR /
 """
@@ -127,8 +126,8 @@ RUN /spack/bin/spack repo add https://github.com/wirecell/wire-cell-spack.git
 USER root
 """
 
-[layer.spack_wirecell]
-description = "Provide spack-build of Wire-Cell Toolkit"
+[layer.spack_wctinst]
+description = "Provide spack-build of Wire-Cell Toolkit via spack install"
 provides = ["spack_wirecell"]
 requires = ["compiler", "host", "spack_wirecell_repos"]
 version = "0.28.0"  # update to desired wirecell version
@@ -138,6 +137,20 @@ RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j {require
 USER root
 """
 
+[layer.spack_wctenv]
+description = "Provide spack-build of Wire-Cell Toolkit via spack environment"
+provides = ["spack_wirecell"]
+requires = ["compiler", "host", "spack_wirecell_repos"]
+version = "0.28.0"  # update to desired wirecell version
+env_name = "wct"
+# Fixme: gonna need +root for latest clus.
+body = """
+USER spack
+RUN /spack/bin/spack env create {env_name}
+RUN /spack/bin/spack -e {env_name} add wire-cell-toolkit@{version} %{requires.compiler.package}@{requires.compiler.version}
+RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
+USER root
+"""
 
 [layer.spack_phlex_repos]
 description = "Provide Spack repos for Phlex."
@@ -162,19 +175,50 @@ USER root
 """
 
 
-[layer.spack_wct_phlex_env]
+[layer.spack_wcph_env]
 description = "Build Wire-Cell Toolkit and Phlex together in a shared Spack environment."
-provides = ["spack_wct_phlex"]
+provides = ["spack_wcph"]
 requires = ["compiler", "host", "spack_wirecell_repos", "spack_phlex_repos"]
-wirecell_version = "0.28.0"  # update to desired wirecell version
+wirecell_version = "0.36.1"  # update to desired wirecell version
 phlex_version = "0.2.0"
-env_name = "wct-phlex"
+env_name = "wcph"
 body = """
 USER spack
+RUN /spack/bin/spack mirror list
+RUN /spack/bin/spack repo list
+RUN rm -rf $(find /spack -name icaruscode -type d)
+RUN rm -rf $(find /spack -name cry -type d)
 RUN /spack/bin/spack env create {env_name}
-RUN /spack/bin/spack -e {env_name} add wirecell@{wirecell_version}%{requires.compiler.package}@{requires.compiler.version}
+RUN /spack/bin/spack -e {env_name} add wire-cell-toolkit@{wirecell_version} +root %{requires.compiler.package}@{requires.compiler.version}
 RUN /spack/bin/spack -e {env_name} add phlex@{phlex_version}%{requires.compiler.package}@{requires.compiler.version}
 RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
-RUN cp /spack/var/spack/environments/{env_name}/spack.lock /{env_name}-spack.lock
+USER root
+"""
+
+
+[layer.spack_edepsimphony]
+description = "Build edep-sim and simphony"
+provides = ["spack_wcph"]
+requires = ["compiler", "host"]
+simphony_version = "0.6.0"
+edepsim_version = "4.1.0"
+env_name = "edepsimphony"
+body = """
+USER spack
+
+RUN echo "Spack v1.1 has spack-packages ca 2025, for Geant4 11.4 we need v2026.03.0"
+RUN cd $(/spack/bin/spack repo list| awk '/builtin/ {{print $NF}}') && git fetch --tags && git checkout v2026.03.0 && cd -
+RUN echo "check we get geant4 11.4.0"
+RUN /spack/bin/spack info geant4|grep 11.4.0
+
+RUN /spack/bin/spack repo add https://github.com/WireCell/edep-simphony-spack.git
+RUN /spack/bin/spack mirror list
+RUN /spack/bin/spack repo list
+
+
+RUN /spack/bin/spack env create {env_name}
+RUN /spack/bin/spack -e {env_name} add edepsim@{edepsim_version}%{requires.compiler.package}@{requires.compiler.version}
+RUN /spack/bin/spack -e {env_name} add simphony@{simphony_version}%{requires.compiler.package}@{requires.compiler.version}
+RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
 USER root
 """

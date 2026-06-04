@@ -26,7 +26,7 @@ set -euo pipefail
 CONTAINER="${CONTAINER:-podman}"                              # podman or docker
 CACHE_HOST="${SPACK_CACHE_HOST:-/nfs/data/1/bviren/spack-cache}"
 CACHE_MOUNT="${SPACK_CACHE_MOUNT:-/cache}"
-IMAGE_REPO="${SPACK_IMAGE_REPO:-localhost/winch/spack_compiler}"  # for auto-pick
+IMAGE_REPO="${SPACK_IMAGE_REPO:-localhost/winch/}"  # for auto-pick
 SPACK_BIN="${SPACK_BIN:-/spack/bin/spack}"
 IMAGE=""                                                      # empty => auto-pick
 MODE="find"                                                  # find | env

@@ -17,9 +17,13 @@ recipe_base = ["debian_dev", "spack_build"]
 recipe_base = "spack_build"
 stack = ["spack_phlex_repos", "spack_phlex"]
 
-[recipe.spack_wirecell]
+[recipe.spack_wctenv]
 recipe_base = "spack_build"
-stack = ["spack_wirecell_repos", "spack_wirecell"]
+stack = ["spack_wirecell_repos", "spack_wctenv"]
+
+[recipe.debian_spack_wctenv]
+recipe_base = ["debian_dev", "spack_wctenv"]
+
 
 [recipe.debian_spack_phlex]
 recipe_base = ["debian_dev", "spack_phlex"]
@@ -28,20 +32,29 @@ recipe_base = ["debian_dev", "spack_phlex"]
 recipe_base = ["alma_dev", "spack_phlex"]
 
 [recipe.debian_spack_wirecell]
-recipe_base = ["debian_dev", "spack_wirecell"]
+recipe_base = ["debian_dev", "spack_wctenv"]
 
 [recipe.alma_spack_wirecell]
-recipe_base = ["alma_dev", "spack_wirecell"]
+recipe_base = ["alma_dev", "spack_wctenv"]
 
-[recipe.spack_wct_phlex]
+
+
+[recipe.spack_wcph]
 recipe_base = "spack_build"
-stack = ["spack_wirecell_repos", "spack_phlex_repos", "spack_wct_phlex_env"]
+stack = ["spack_phlex_repos", "spack_wirecell_repos", "spack_wcph_env"]
 
-[recipe.debian_spack_wct_phlex]
-recipe_base = ["debian_dev", "spack_wct_phlex"]
-# spack.buildcache_mirror = "oci://ghcr.io/yourorg/spack-cache"
-# or: winch recipe debian_spack_wct_phlex --set spack.buildcache_mirror=oci://...
-# or: spack.buildcache_mirror = "file:///big/disk/spack-cache"
+[recipe.debian_spack_wcph]
+recipe_base = ["debian_dev", "spack_wcph"]
 
-[recipe.alma_spack_wct_phlex]
-recipe_base = ["alma_dev", "spack_wct_phlex"]
+[recipe.alma_spack_wcph]
+recipe_base = ["alma_dev", "spack_wcph"]
+
+
+[recipe.spack_edepsimphony]
+recipe_base = "spack_build"
+stack = ["spack_edepsimphony"]
+
+[recipe.debian_spack_edepsimphony]
+recipe_base = ["debian_dev", "spack_edepsimphony"]
+
+
