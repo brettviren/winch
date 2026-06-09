@@ -42,10 +42,17 @@ provides = ["os:alma", "pkg-mgr:dnf"]
 containerfile = "FROM almalinux:{release}\n"
 
 
+[layer.uv_curl]
+description = "Install uv with curl/install.sh to /usr/local (may install new versions over time)"
+provides = ["uv"]
+body = """
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
+"""
+
 [layer.debian_dev]
 description = "Install a minimal package set to support C++/Python development."
 requires = ["os:debian"]
-provides = ["devtools", "uv"]
+provides = ["devtools"]
 body = """
 RUN apt-get update \
     && \
@@ -56,13 +63,12 @@ RUN apt-get update \
     python3-yaml ripgrep sudo unzip wget zip zlib1g-dev \
     && \
     apt-get clean
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
 """
 
 [layer.alma_dev]
 description = "Install a minimal package set to support C++/Python development."
 requires = ["os:alma"]
-provides = ["devtools", "uv"]
+provides = ["devtools"]
 body = """
 RUN dnf install -y epel-release && dnf clean all
 RUN dnf install -y \
@@ -73,7 +79,6 @@ RUN dnf install -y \
     python-unversioned-command ripgrep sudo unzip wget zip zlib-devel \
     && \
     dnf clean all
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
 """
 
 [layer.spack]
@@ -177,7 +182,7 @@ USER root
 
 [layer.spack_wcph_env]
 description = "Build Wire-Cell Toolkit and Phlex together in a shared Spack environment."
-provides = ["spack_wcph"]
+provides = ["spack_wcph", "spack_env"]
 requires = ["compiler", "host", "spack_wirecell_repos", "spack_phlex_repos"]
 wirecell_version = "0.36.1"  # update to desired wirecell version
 phlex_version = "0.2.0"
@@ -198,7 +203,7 @@ USER root
 
 [layer.spack_edepsimphony]
 description = "Build edep-sim and simphony"
-provides = ["spack_wcph"]
+provides = ["spack_wcph", "spack_env"]
 requires = ["compiler", "host"]
 simphony_version = "0.6.0"
 edepsim_version = "4.1.0"
@@ -220,5 +225,26 @@ RUN /spack/bin/spack env create {env_name}
 RUN /spack/bin/spack -e {env_name} add edepsim@{edepsim_version}%{requires.compiler.package}@{requires.compiler.version}
 RUN /spack/bin/spack -e {env_name} add simphony@{simphony_version}%{requires.compiler.package}@{requires.compiler.version}
 RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
+USER root
+"""
+
+# fixme: should decouple devel user from mise and mise-installed and provide aggregating recipes
+[layer.devel]
+description = "Basis for a developer user and environment"
+provides = ["devel","mise","uv","claude","beads"]
+body = """
+RUN apt install -y extrepo
+RUN extrepo enable mise
+RUN apt update
+RUN apt install -y mise
+
+RUN useradd -c 'Software Developer' -d /devel -s /bin/bash devel
+RUN chown -R devel:devel /devel
+USER devel
+
+RUN mise install aqua:gastownhall/beads
+RUN mise install claude-code
+RUN mise install uv
+
 USER root
 """

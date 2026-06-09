@@ -26,3 +26,8 @@ build-backend = "setuptools.build_meta"
 dev = [
     "pytest>=8.3.4",
 ]
+
+[tool.pytest.ini_options]
+# Confine collection to tests/ so pytest does not walk untracked trees such as
+# native/ (a spack install whose deeply self-nested symlinks break collection).
+testpaths = ["tests"]

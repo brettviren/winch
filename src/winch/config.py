@@ -107,9 +107,9 @@ RESERVED_TOPLEVEL = ("winch",)
 # Top-level namespaces that mark the new paradigm.
 NEW_NAMESPACES = ("layer", "recipe")
 # Layer keys with dedicated meaning (everything else is a layer variable).
-LAYER_SPECIAL = ("provides", "requires", "body", "containerfile")
+LAYER_SPECIAL = ("provides", "requires", "body", "containerfile", "description")
 # Recipe keys with dedicated meaning (everything else is layer-qualified vars).
-RECIPE_SPECIAL = ("recipe_base", "stack")
+RECIPE_SPECIAL = ("recipe_base", "stack", "description")
 
 
 @dataclass
@@ -122,6 +122,7 @@ class Layer:
     - provides/requires: capability tag lists (see doc section 12.6).
     - body: Containerfile minus the FROM (winch injects "FROM {parent[image]}").
     - containerfile: full Containerfile, used verbatim (the escape hatch).
+    - description: optional one-line human description of the layer.
     '''
     name: str
     vars: dict = field(default_factory=dict)
@@ -129,6 +130,7 @@ class Layer:
     requires: list = field(default_factory=list)
     body: str = None
     containerfile: str = None
+    description: str = None
 
 
 @dataclass
@@ -139,11 +141,13 @@ class Recipe:
     - recipe_base: names of recipes to inherit from (in order).
     - stack: ordered list of layer names (base first).
     - layer_vars: maps a layer name to a dict of variable overrides.
+    - description: optional one-line human description of the recipe.
     '''
     name: str
     recipe_base: list = field(default_factory=list)
     stack: list = field(default_factory=list)
     layer_vars: dict = field(default_factory=dict)
+    description: str = None
 
 
 def _is_scalar(value):
@@ -218,6 +222,9 @@ def parse_layer(name, table):
     containerfile = table.get("containerfile", None)
     if containerfile is not None and not isinstance(containerfile, str):
         raise ConfigError(f'layer "{name}" containerfile must be a string')
+    description = table.get("description", None)
+    if description is not None and not isinstance(description, str):
+        raise ConfigError(f'layer "{name}" description must be a string')
 
     variables = dict()
     for key, value in table.items():
@@ -235,7 +242,8 @@ def parse_layer(name, table):
 
     return Layer(name=name, vars=variables,
                  provides=provides, requires=requires,
-                 body=body, containerfile=containerfile)
+                 body=body, containerfile=containerfile,
+                 description=description)
 
 
 def parse_recipe(name, table):
@@ -248,6 +256,10 @@ def parse_recipe(name, table):
     '''
     recipe_base = _as_str_list(table["recipe_base"], f'recipe "{name}" recipe_base') \
         if "recipe_base" in table else []
+
+    description = table.get("description", None)
+    if description is not None and not isinstance(description, str):
+        raise ConfigError(f'recipe "{name}" description must be a string')
 
     stack = table.get("stack", [])
     if not isinstance(stack, list):
@@ -276,7 +288,8 @@ def parse_recipe(name, table):
         layer_vars[key] = overrides
 
     return Recipe(name=name, recipe_base=recipe_base,
-                  stack=list(stack), layer_vars=layer_vars)
+                  stack=list(stack), layer_vars=layer_vars,
+                  description=description)
 
 
 def parse(config):

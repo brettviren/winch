@@ -46,8 +46,12 @@ stack = ["spack_phlex_repos", "spack_wirecell_repos", "spack_wcph_env"]
 [recipe.debian_spack_wcph]
 recipe_base = ["debian_dev", "spack_wcph"]
 
-[recipe.alma_spack_wcph]
-recipe_base = ["alma_dev", "spack_wcph"]
+[recipe.debian_spack_wcph_devel]
+description = "Wire-Cell/Phlex spack environment with devel user"
+recipe_base = ["debian_spack_wcph"]
+stack = ["devel"]
+
+
 
 
 [recipe.spack_edepsimphony]

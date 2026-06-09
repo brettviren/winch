@@ -163,6 +163,23 @@ def test_layer_dict_variable_rejected():
     assert "sub" in str(ei.value)
 
 
+def test_layer_description():
+    # description is a special field, not a build variable.
+    layer = parse_layer("x", {"description": "a small host", "ncpu": 2})
+    assert layer.description == "a small host"
+    assert layer.vars == {"ncpu": 2}
+
+
+def test_layer_description_default_none():
+    assert parse_layer("x", {"body": "RUN true\n"}).description is None
+
+
+def test_layer_description_must_be_string():
+    with pytest.raises(ConfigError) as ei:
+        parse_layer("x", {"description": 5})
+    assert "description" in str(ei.value)
+
+
 # --- recipe parsing ---------------------------------------------------------
 
 def test_parse_recipe_full():
@@ -215,6 +232,23 @@ def test_recipe_bad_scalar_key_is_error():
     with pytest.raises(ConfigError) as ei:
         parse_recipe("r", {"foo": "bar"})
     assert "foo" in str(ei.value)
+
+
+def test_recipe_description():
+    # description is a special field, not a layer-qualified variable.
+    r = parse_recipe("r", {"description": "dev env", "stack": ["spack"]})
+    assert r.description == "dev env"
+    assert r.layer_vars == {}
+
+
+def test_recipe_description_default_none():
+    assert parse_recipe("r", {}).description is None
+
+
+def test_recipe_description_must_be_string():
+    with pytest.raises(ConfigError) as ei:
+        parse_recipe("r", {"description": 5})
+    assert "description" in str(ei.value)
 
 
 def test_recipe_stack_must_be_list():

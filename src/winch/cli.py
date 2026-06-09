@@ -272,8 +272,10 @@ def cmd_config(ctx):
 @old_select_options
 @click.option("-t","--template", default="{image}",
               help="The template for display")
+@click.option("-l","--long", is_flag=True, default=False,
+              help="Append each layer/recipe description, if one exists")
 @click.pass_context
-def cmd_list(ctx, name, stack, sets, kind, deps, instances, template):
+def cmd_list(ctx, name, stack, sets, kind, deps, instances, template, long):
     '''
     List things about the winch graph.
 
@@ -286,10 +288,14 @@ def cmd_list(ctx, name, stack, sets, kind, deps, instances, template):
     template = template.replace('\\n','\n').replace('\\t','\t')
 
     if main.paradigm == "new" and not name and not stack:
+        def describe(line, desc):
+            if long and desc:
+                return f'{line}\t{desc}'
+            return line
         for lname in sorted(main.layers):
-            print(f'layer {lname}')
+            print(describe(f'layer {lname}', main.layers[lname].description))
         for rname in sorted(main.recipes):
-            print(f'recipe {rname}')
+            print(describe(f'recipe {rname}', main.recipes[rname].description))
         return
 
     graph, inodes = graph_and_inodes(ctx, kind, deps, instances,
