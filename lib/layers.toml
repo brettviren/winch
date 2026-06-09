@@ -4,12 +4,17 @@
 # work.  It can be used as a starting point or to provide examples for other
 # domains.
 
-# Rules for layers here:
+# There is one main rule:
 #
-# - any layer that uses a special user will switching back to root before finishing.
-# 
-# - any layer that sets WORKDIR internaly will set it back to "/" before finishing.
-
+# - Any dependency between layers is expressed with provides/requires.
+#
+# The main implication is that any state settings like USER and WORKDIR:
+#
+# - Must be set by a layer as needed and not assumed
+#
+# - May be left as-is, and in some cases should to satisfy runtime needs.
+#
+# - If a provides/requires includes a promise on USER or WORKDIR values, a layer may assume they are set.
 
 ### Define some abstract network locations and hosts
 
@@ -46,6 +51,7 @@ containerfile = "FROM almalinux:{release}\n"
 description = "Install uv with curl/install.sh to /usr/local (may install new versions over time)"
 provides = ["uv"]
 body = """
+USER root
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
 """
 
@@ -54,6 +60,7 @@ description = "Install a minimal package set to support C++/Python development."
 requires = ["os:debian"]
 provides = ["devtools"]
 body = """
+USER root
 RUN apt-get update \
     && \
     apt-get install -y \
@@ -70,6 +77,7 @@ description = "Install a minimal package set to support C++/Python development."
 requires = ["os:alma"]
 provides = ["devtools"]
 body = """
+USER root
 RUN dnf install -y epel-release && dnf clean all
 RUN dnf install -y \
     autoconf bash ca-certificates clang coreutils curl direnv \
@@ -88,6 +96,7 @@ provides = ["spack"]
 version = "v1.1.0"
 buildcache_mirror = "{requires.network.spack_cache}"
 body = """
+USER root
 RUN git clone --branch {version} --depth=2 https://github.com/spack/spack.git /spack
 RUN useradd -c 'Spack Packages' -d /spack -s /bin/bash spack
 RUN chown -R spack:spack /spack
@@ -100,10 +109,6 @@ RUN /spack/bin/spack bootstrap now
 
 # See spack-buildcache-push.sh for all-in-one way to fill a cache from a spack install area in a container.
 RUN bash -c 'test -z "{buildcache_mirror}" || /spack/bin/spack mirror add --unsigned buildcache {buildcache_mirror}'
-
-# Go back to root.  When doing spack things with this or other images, best to do so as user spack.
-USER root
-WORKDIR /
 """
 
 
@@ -118,7 +123,6 @@ requires = ["spack", "host"]
 body = """
 USER spack
 RUN /spack/bin/spack install -j {requires.host.ncpu} {package}@{version}
-USER root
 """
 
 [layer.spack_wirecell_repos]
@@ -128,7 +132,6 @@ requires = ["spack"]
 body = """
 USER spack
 RUN /spack/bin/spack repo add https://github.com/wirecell/wire-cell-spack.git
-USER root
 """
 
 [layer.spack_wctinst]
@@ -139,7 +142,6 @@ version = "0.28.0"  # update to desired wirecell version
 body = """
 USER spack
 RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j {requires.host.ncpu} wirecell@{version}%{requires.compiler.package}@{requires.compiler.version}"
-USER root
 """
 
 [layer.spack_wctenv]
@@ -154,7 +156,6 @@ USER spack
 RUN /spack/bin/spack env create {env_name}
 RUN /spack/bin/spack -e {env_name} add wire-cell-toolkit@{version} %{requires.compiler.package}@{requires.compiler.version}
 RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
-USER root
 """
 
 [layer.spack_phlex_repos]
@@ -165,7 +166,6 @@ body = """
 USER spack
 RUN /spack/bin/spack repo add https://github.com/FNALssi/fnal_art.git
 RUN /spack/bin/spack repo add https://github.com/Framework-R-D/phlex-spack-recipes.git
-USER root
 """
 
 [layer.spack_phlex]
@@ -176,7 +176,6 @@ version = "0.2.0"
 body = """
 USER spack
 RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j {requires.host.ncpu} phlex@{version}%{requires.compiler.package}@{requires.compiler.version}"
-USER root
 """
 
 
@@ -197,7 +196,6 @@ RUN /spack/bin/spack env create {env_name}
 RUN /spack/bin/spack -e {env_name} add wire-cell-toolkit@{wirecell_version} +root %{requires.compiler.package}@{requires.compiler.version}
 RUN /spack/bin/spack -e {env_name} add phlex@{phlex_version}%{requires.compiler.package}@{requires.compiler.version}
 RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
-USER root
 """
 
 
@@ -225,7 +223,6 @@ RUN /spack/bin/spack env create {env_name}
 RUN /spack/bin/spack -e {env_name} add edepsim@{edepsim_version}%{requires.compiler.package}@{requires.compiler.version}
 RUN /spack/bin/spack -e {env_name} add simphony@{simphony_version}%{requires.compiler.package}@{requires.compiler.version}
 RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
-USER root
 """
 
 # fixme: should decouple devel user from mise and mise-installed and provide aggregating recipes
@@ -233,18 +230,19 @@ USER root
 description = "Basis for a developer user and environment"
 provides = ["devel","mise","uv","claude","beads"]
 body = """
+USER root
 RUN apt install -y extrepo
 RUN extrepo enable mise
 RUN apt update
 RUN apt install -y mise
 
-RUN useradd -c 'Software Developer' -d /devel -s /bin/bash devel
-RUN chown -R devel:devel /devel
+RUN useradd -c 'Software Developer' -m -d /devel -s /bin/bash devel
+
 USER devel
 
-RUN mise install aqua:gastownhall/beads
-RUN mise install claude-code
-RUN mise install uv
+RUN mise use -g aqua:gastownhall/beads
+RUN mise use -g claude-code
+RUN mise use -g uv
 
-USER root
+RUN echo 'export PATH="$HOME/.local/share/mise/shims:$PATH"' >> /devel/.bashrc
 """
