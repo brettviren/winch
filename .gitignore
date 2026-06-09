@@ -18,3 +18,6 @@ wheels/
 .dolt/
 *.db
 .beads-credential-key
+
+# beads: database lives on the shared Dolt server; .beads/ is local-only
+.beads/
