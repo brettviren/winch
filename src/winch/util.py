@@ -204,7 +204,11 @@ def digest(obj, hasher=hashlib.sha1):
         return hasher(obj.encode('utf8')).hexdigest()
 
     if isinstance(obj, int):
-        return hasher(obj.to_bytes()).hexdigest()
+        # Use the minimal byte width (>=1) so ints >= 256 don't overflow the
+        # 1-byte default.  For 0..255 this is still 1 byte, preserving the prior
+        # digests (and thus image identities) of small integer variables.
+        nbytes = (obj.bit_length() + 7) // 8 or 1
+        return hasher(obj.to_bytes(nbytes, 'big')).hexdigest()
 
     if isinstance(obj, float):
         return hasher(obj.hex()).hexdigest()

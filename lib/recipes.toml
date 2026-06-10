@@ -47,9 +47,10 @@ stack = ["spack_phlex_repos", "spack_wirecell_repos", "spack_wcph_env"]
 recipe_base = ["debian_dev", "spack_wcph"]
 
 [recipe.debian_spack_wcph_devel]
-description = "Wire-Cell/Phlex spack environment with devel user"
+description = "Wire-Cell/Phlex spack environment ready for user home mounted to /devel"
+image_tags = ["latest", "ddm"]
 recipe_base = ["debian_spack_wcph"]
-stack = ["devel"]
+stack = ["devel_user"]
 
 
 

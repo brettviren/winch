@@ -202,6 +202,39 @@ def test_anonymous_stack():
     assert rr.layer_vars["spack"] == {"version": "v1.0.0"}
 
 
+# --- image_tags -------------------------------------------------------------
+
+def test_image_tags_resolved_from_named():
+    layers, recipes = cfg(LAYERS_TOML + """
+    [recipe.r]
+    stack = ["debian"]
+    image_tags = ["latest", "ddm"]
+    """)
+    rr = resolve(layers, recipes, name="r")
+    assert rr.image_tags == ["latest", "ddm"]
+
+
+def test_image_tags_accumulate_base_first_deduped():
+    layers, recipes = cfg(LAYERS_TOML + """
+    [recipe.a]
+    stack = ["debian"]
+    image_tags = ["latest", "shared"]
+    [recipe.r]
+    recipe_base = "a"
+    stack = ["spack"]
+    image_tags = ["shared", "own"]
+    """)
+    rr = resolve(layers, recipes, name="r")
+    # base tags first, own appended, "shared" not duplicated
+    assert rr.image_tags == ["latest", "shared", "own"]
+
+
+def test_image_tags_empty_for_anonymous():
+    layers, recipes = cfg(LAYERS_TOML)
+    rr = resolve(layers, recipes, stack=["debian", "spack"])
+    assert rr.image_tags == []
+
+
 def test_set_highest_precedence_named():
     layers, recipes = cfg(LAYERS_TOML + """
     [recipe.r]

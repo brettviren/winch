@@ -8,12 +8,21 @@ import tomllib
 import pytest
 
 from winch.config import (
-    parse, detect_paradigm, parse_layer, parse_recipe, ConfigError,
+    parse, detect_paradigm, parse_layer, parse_recipe, load_many, ConfigError,
 )
 
 
 def from_toml(text):
     return tomllib.loads(text)
+
+
+def test_load_many_merges_three_files(tmp_path):
+    # Regression: load_many used to drop the third+ config file.
+    a = tmp_path / "a.toml"; a.write_text('[layer.a]\nx = 1\n')
+    b = tmp_path / "b.toml"; b.write_text('[recipe.r]\nstack = ["a"]\n')
+    c = tmp_path / "c.toml"; c.write_text('[run.go]\nimage = "recipe.r"\n')
+    cfg = load_many(f'{a},{b},{c}')
+    assert "layer" in cfg and "recipe" in cfg and "run" in cfg
 
 
 # --- paradigm detection -----------------------------------------------------

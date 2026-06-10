@@ -88,10 +88,9 @@ def load_many(*paths):
     if not my_paths:
         my_paths = [None]       # will load single default
 
-    cfg = load(my_paths.pop(0))
-    for path in my_paths:
-        new = load(my_paths.pop(0))
-        cfg = merge(cfg, new)
+    cfg = load(my_paths[0])
+    for path in my_paths[1:]:
+        cfg = merge(cfg, load(path))
     return cfg
 
 
@@ -105,11 +104,13 @@ def load_many(*paths):
 # Top-level keys that are not user "kind" tables in either paradigm.
 RESERVED_TOPLEVEL = ("winch",)
 # Top-level namespaces that mark the new paradigm.
-NEW_NAMESPACES = ("layer", "recipe")
+NEW_NAMESPACES = ("layer", "recipe", "run")
 # Layer keys with dedicated meaning (everything else is a layer variable).
 LAYER_SPECIAL = ("provides", "requires", "body", "containerfile", "description")
 # Recipe keys with dedicated meaning (everything else is layer-qualified vars).
-RECIPE_SPECIAL = ("recipe_base", "stack", "description")
+RECIPE_SPECIAL = ("recipe_base", "stack", "description", "image_tags")
+# Run keys with dedicated meaning (everything else is a run variable).
+RUN_SPECIAL = ("image", "volumes", "podman_args", "command", "description")
 
 
 @dataclass
@@ -142,11 +143,38 @@ class Recipe:
     - stack: ordered list of layer names (base first).
     - layer_vars: maps a layer name to a dict of variable overrides.
     - description: optional one-line human description of the recipe.
+    - image_tags: optional list of tags to apply to the final built image.
+      The special value "latest" expands to "{recipe name}:latest"; any other
+      value is used verbatim as the tag.
     '''
     name: str
     recipe_base: list = field(default_factory=list)
     stack: list = field(default_factory=list)
     layer_vars: dict = field(default_factory=dict)
+    description: str = None
+    image_tags: list = field(default_factory=list)
+
+
+@dataclass
+class Run:
+    '''
+    A description of how to run a built image with "winch run".
+
+    - image: an image name, or "recipe.NAME" to use the leaf image of a recipe.
+    - vars: free run variables (e.g. uid/gid), usable in f-string markup.  May
+      reference recipe layer variables via "{layer.NAME.VAR}".
+    - volumes: list of "-v" volume specs (host:ctr[:opts] or name:ctr[:opts]).
+    - podman_args: list of extra "podman run" option strings (before the image).
+    - command: default in-container command (a string, shell-split); overridden
+      by any command given after "--" on the "winch run" command line.
+    - description: optional one-line human description of the run.
+    '''
+    name: str
+    image: str = None
+    vars: dict = field(default_factory=dict)
+    volumes: list = field(default_factory=list)
+    podman_args: list = field(default_factory=list)
+    command: str = None
     description: str = None
 
 
@@ -261,6 +289,9 @@ def parse_recipe(name, table):
     if description is not None and not isinstance(description, str):
         raise ConfigError(f'recipe "{name}" description must be a string')
 
+    image_tags = _as_str_list(table["image_tags"], f'recipe "{name}" image_tags') \
+        if "image_tags" in table else []
+
     stack = table.get("stack", [])
     if not isinstance(stack, list):
         raise ConfigError(f'recipe "{name}" stack must be a list of layer names')
@@ -289,7 +320,61 @@ def parse_recipe(name, table):
 
     return Recipe(name=name, recipe_base=recipe_base,
                   stack=list(stack), layer_vars=layer_vars,
-                  description=description)
+                  description=description, image_tags=image_tags)
+
+
+def parse_run(name, table):
+    '''
+    Parse one [run.NAME] table into a Run.
+
+    Keys in RUN_SPECIAL have dedicated meaning; every other (scalar) key is a
+    run variable available to f-string markup (e.g. uid/gid).
+    '''
+    if "image" not in table:
+        raise ConfigError(f'run "{name}" has no "image"')
+    image = table["image"]
+    if not isinstance(image, str):
+        raise ConfigError(f'run "{name}" image must be a string')
+
+    description = table.get("description", None)
+    if description is not None and not isinstance(description, str):
+        raise ConfigError(f'run "{name}" description must be a string')
+
+    command = table.get("command", None)
+    if command is not None and not isinstance(command, str):
+        raise ConfigError(f'run "{name}" command must be a string')
+
+    volumes = _as_str_list(table["volumes"], f'run "{name}" volumes') \
+        if "volumes" in table else []
+    podman_args = _as_str_list(table["podman_args"], f'run "{name}" podman_args') \
+        if "podman_args" in table else []
+
+    variables = dict()
+    for key, value in table.items():
+        if key in RUN_SPECIAL:
+            continue
+        if not _is_scalar(value):
+            raise ConfigError(
+                f'run "{name}" variable "{key}" must be a scalar, '
+                f'got {type(value).__name__}')
+        variables[key] = value
+
+    return Run(name=name, image=image, vars=variables,
+               volumes=volumes, podman_args=podman_args,
+               command=command, description=description)
+
+
+def parse_runs(config):
+    '''
+    Parse the [run.*] tables of a (merged) configuration dict.
+
+    Returns a dict mapping run name to Run (empty if there are no run tables).
+    Kept separate from parse() so existing (paradigm, layers, recipes) callers
+    are unaffected.
+    '''
+    config = config or {}
+    return {name: parse_run(name, table)
+            for name, table in config.get("run", {}).items()}
 
 
 def parse(config):

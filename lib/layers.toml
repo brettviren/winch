@@ -47,35 +47,29 @@ provides = ["os:alma", "pkg-mgr:dnf"]
 containerfile = "FROM almalinux:{release}\n"
 
 
-[layer.uv_curl]
-description = "Install uv with curl/install.sh to /usr/local (may install new versions over time)"
-provides = ["uv"]
-body = """
-USER root
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh && mv /root/.local/bin/uv* /usr/local/bin/
-"""
-
 [layer.debian_dev]
 description = "Install a minimal package set to support C++/Python development."
 requires = ["os:debian"]
-provides = ["devtools"]
+provides = ["devbase","mise"]
 body = """
 USER root
 RUN apt-get update \
     && \
     apt-get install -y \
     autoconf bash build-essential ca-certificates clang coreutils curl direnv \
-    emacs fd-find gfortran git gpg jq less llvm locales lsb-release man-db \
+    emacs extrepo fd-find gfortran git gpg jq less llvm locales lsb-release man-db \
     python-is-python3 python3 python3-click python3-setuptools python3-venv \
     python3-yaml ripgrep sudo unzip wget zip zlib1g-dev \
     && \
     apt-get clean
+RUN extrepo enable mise && apt-get update && apt-get install -y mise && apt-get clean
 """
 
+# fixme: provide mise
 [layer.alma_dev]
 description = "Install a minimal package set to support C++/Python development."
 requires = ["os:alma"]
-provides = ["devtools"]
+provides = ["devbase"]
 body = """
 USER root
 RUN dnf install -y epel-release && dnf clean all
@@ -91,28 +85,37 @@ RUN dnf install -y \
 
 [layer.spack]
 description = "Provide a Spack install under /spack with everything owned by user spack."
-requires = ["os:debian|os:alma", "network"]
+requires = ["devbase", "network"]
 provides = ["spack"]
 version = "v1.1.0"
+uid = 1001
+gid = 1001
+user = "spack"
 buildcache_mirror = "{requires.network.spack_cache}"
 body = """
+
 USER root
+
 RUN git clone --branch {version} --depth=2 https://github.com/spack/spack.git /spack
-RUN useradd -c 'Spack Packages' -d /spack -s /bin/bash spack
-RUN chown -R spack:spack /spack
+RUN groupadd -g {gid} {user} \\
+ && useradd -u {uid} -g {gid} -c 'Spack packages' -m -d /{user} -s /bin/bash {user}
+RUN chown -R {user}:{user} /{user}
+
 USER spack
 WORKDIR /spack
+
 RUN /spack/bin/spack config add 'packages:all:target:[x86_64]'
 RUN /spack/bin/spack config add 'config:install_tree:padded_length:128'
 RUN /spack/bin/spack compiler find
 RUN /spack/bin/spack bootstrap now
 
+RUN echo "Spack v1.1 has spack-packages ca 2025, for Geant4 11.4 and Arrow 22 we need v2026.03.0"
+RUN /spack/bin/spack repo list
+RUN cd $(/spack/bin/spack repo list| awk '/builtin/ {{print $NF}}') && git fetch --tags && git checkout v2026.03.0 && cd -
+
 # See spack-buildcache-push.sh for all-in-one way to fill a cache from a spack install area in a container.
 RUN bash -c 'test -z "{buildcache_mirror}" || /spack/bin/spack mirror add --unsigned buildcache {buildcache_mirror}'
 """
-
-
-# Fixme: make it so we may provide a layer.host, define 'ncpus = 12' and use "{host.cpus}" in this body.
 
 [layer.spack_compiler]
 description = "Build a compiler with Spack."
@@ -126,7 +129,7 @@ RUN /spack/bin/spack install -j {requires.host.ncpu} {package}@{version}
 """
 
 [layer.spack_wirecell_repos]
-description = "Provide Spack repos for Wire-Cell Toolkit"
+description = "Provide Spack repos for Wire-Cell Toolkit, stack AFTER spack_phlex_repos"
 provides = ["spack_wirecell_repos"]
 requires = ["spack"]
 body = """
@@ -138,10 +141,11 @@ RUN /spack/bin/spack repo add https://github.com/wirecell/wire-cell-spack.git
 description = "Provide spack-build of Wire-Cell Toolkit via spack install"
 provides = ["spack_wirecell"]
 requires = ["compiler", "host", "spack_wirecell_repos"]
-version = "0.28.0"  # update to desired wirecell version
+version = "0.36.1"  # update to desired wirecell version
+wirecell_spec = "wire-cell-toolkit@{version}%{requires.compiler.package}@{requires.compiler.version}"
 body = """
 USER spack
-RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j {requires.host.ncpu} wirecell@{version}%{requires.compiler.package}@{requires.compiler.version}"
+RUN /spack/bin/spack install -j {requires.host.ncpu} {wirecell_spec}
 """
 
 [layer.spack_wctenv]
@@ -159,7 +163,7 @@ RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
 """
 
 [layer.spack_phlex_repos]
-description = "Provide Spack repos for Phlex."
+description = "Provide Spack repos for Phlex, stack BEFORE spack_wirecell_repos"
 provides = ["spack_phlex_repos"]
 requires = ["spack"]
 body = """
@@ -173,9 +177,12 @@ description = "Provide spack-build of Phlex."
 provides = ["spack_phlex"]
 requires = ["compiler", "host", "spack_phlex_repos"]
 version = "0.2.0"
+phlex_spec = "phlex@{version}%{requires.compiler.package}@{requires.compiler.version}"
 body = """
 USER spack
-RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j {requires.host.ncpu} phlex@{version}%{requires.compiler.package}@{requires.compiler.version}"
+# For why we had to enter spack env, see https://github.com/FNALssi/fnal_art/issues/146
+# RUN bash -c "source /spack/share/spack/setup-env.sh && spack install -j {requires.host.ncpu} phlex@{version}%{requires.compiler.package}@{requires.compiler.version}"
+RUN /spack/bin/spack install -j {requires.host.ncpu} {phlex_spec}
 """
 
 
@@ -185,6 +192,9 @@ provides = ["spack_wcph", "spack_env"]
 requires = ["compiler", "host", "spack_wirecell_repos", "spack_phlex_repos"]
 wirecell_version = "0.36.1"  # update to desired wirecell version
 phlex_version = "0.2.0"
+wirecell_spec = "wire-cell-toolkit@{wirecell_version} +root %{requires.compiler.package}@{requires.compiler.version}"
+phlex_spec = "phlex@{phlex_version}%{requires.compiler.package}@{requires.compiler.version}"
+arrow_spec = "arrow@22.0.0%{requires.compiler.package}@{requires.compiler.version}"
 env_name = "wcph"
 body = """
 USER spack
@@ -193,8 +203,13 @@ RUN /spack/bin/spack repo list
 RUN rm -rf $(find /spack -name icaruscode -type d)
 RUN rm -rf $(find /spack -name cry -type d)
 RUN /spack/bin/spack env create {env_name}
-RUN /spack/bin/spack -e {env_name} add wire-cell-toolkit@{wirecell_version} +root %{requires.compiler.package}@{requires.compiler.version}
-RUN /spack/bin/spack -e {env_name} add phlex@{phlex_version}%{requires.compiler.package}@{requires.compiler.version}
+RUN /spack/bin/spack -e {env_name} add gcc@15
+RUN /spack/bin/spack -e {env_name} add cmake
+RUN /spack/bin/spack -e {env_name} add {wirecell_spec}
+RUN /spack/bin/spack -e {env_name} add {phlex_spec}
+RUN /spack/bin/spack -e {env_name} add {arrow_spec}
+RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
+RUN /spack/bin/spack -e {env_name} add {arrow_spec}
 RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
 """
 
@@ -205,12 +220,12 @@ provides = ["spack_wcph", "spack_env"]
 requires = ["compiler", "host"]
 simphony_version = "0.6.0"
 edepsim_version = "4.1.0"
+simphony_spec = "simphony@{simphony_version}%{requires.compiler.package}@{requires.compiler.version}"
+edepsim_spec = "edepsim@{edepsim_version}%{requires.compiler.package}@{requires.compiler.version}"
 env_name = "edepsimphony"
 body = """
 USER spack
 
-RUN echo "Spack v1.1 has spack-packages ca 2025, for Geant4 11.4 we need v2026.03.0"
-RUN cd $(/spack/bin/spack repo list| awk '/builtin/ {{print $NF}}') && git fetch --tags && git checkout v2026.03.0 && cd -
 RUN echo "check we get geant4 11.4.0"
 RUN /spack/bin/spack info geant4|grep 11.4.0
 
@@ -218,31 +233,38 @@ RUN /spack/bin/spack repo add https://github.com/WireCell/edep-simphony-spack.gi
 RUN /spack/bin/spack mirror list
 RUN /spack/bin/spack repo list
 
-
 RUN /spack/bin/spack env create {env_name}
-RUN /spack/bin/spack -e {env_name} add edepsim@{edepsim_version}%{requires.compiler.package}@{requires.compiler.version}
-RUN /spack/bin/spack -e {env_name} add simphony@{simphony_version}%{requires.compiler.package}@{requires.compiler.version}
+RUN /spack/bin/spack -e {env_name} add {edepsim_spec}
+RUN /spack/bin/spack -e {env_name} add {simphony_spec}
 RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
 """
 
-# fixme: should decouple devel user from mise and mise-installed and provide aggregating recipes
-[layer.devel]
-description = "Basis for a developer user and environment"
-provides = ["devel","mise","uv","claude","beads"]
+[layer.devel_user]
+description = "Add a devel user with empty HOME at /devel intended for native host mount"
+provides = ["devuser"]
+requires = ["devbase"]  # but likely you want to stack more
+# Pin the UID/GID as inputs so a run config (and "--userns=keep-id:uid=,gid=")
+# can reference {layer.devel_user.uid}/{layer.devel_user.gid} without probing.
+uid = 1002
+gid = 1002
 body = """
 USER root
-RUN apt install -y extrepo
-RUN extrepo enable mise
-RUN apt update
-RUN apt install -y mise
-
-RUN useradd -c 'Software Developer' -m -d /devel -s /bin/bash devel
-
+RUN groupadd -g {gid} devel \\
+ && useradd -u {uid} -g {gid} -c 'Software Developer' -m -d /devel -s /bin/bash devel
 USER devel
-
-RUN mise use -g aqua:gastownhall/beads
-RUN mise use -g claude-code
-RUN mise use -g uv
-
-RUN echo 'export PATH="$HOME/.local/share/mise/shims:$PATH"' >> /devel/.bashrc
+WORKDIR /devel
 """
+# note: minimal user setup as $HOME will be provided by a native volume mount
+# note: some one-time setup is then needed from inside the running container.
+
+
+
+
+# USER devel
+# WORKDIR /devel
+
+# RUN mise use -g aqua:gastownhall/beads
+# RUN mise use -g claude-code
+# RUN mise use -g uv
+
+# RUN echo 'export PATH="$HOME/.local/share/mise/shims:$PATH"' >> /devel/.bashrc

@@ -30,10 +30,14 @@ class ResolvedRecipe:
       than once (e.g. diamond inheritance); the generator dedups by digest.
     - layer_vars: maps each distinct layer name in the stack to its resolved
       variable map (layer defaults overridden by the recipe/CLI chain).
+    - image_tags: ordered list of tags to apply to the final built image,
+      accumulated base-first through recipe_base.  The special value "latest"
+      is left as-is here and expanded by the consumer.
     '''
     name: str
     stack: list = field(default_factory=list)
     layer_vars: dict = field(default_factory=dict)
+    image_tags: list = field(default_factory=list)
 
 
 def _merge_overrides(dst, src):
@@ -69,8 +73,10 @@ def _resolve_chain(recipe, recipes, _path):
     '''
     Recursively resolve a recipe's effective stack and override map.
 
-    Returns (stack, overrides) where overrides holds only recipe-supplied
-    layer-qualified variables (no layer defaults).  Detects recipe_base cycles.
+    Returns (stack, overrides, image_tags) where overrides holds only
+    recipe-supplied layer-qualified variables (no layer defaults) and image_tags
+    is the base-first accumulation of each recipe's image_tags (order-preserving,
+    deduplicated).  Detects recipe_base cycles.
     '''
     if recipe.name in _path:
         cycle = " -> ".join(_path + [recipe.name])
@@ -79,19 +85,26 @@ def _resolve_chain(recipe, recipes, _path):
 
     stack = list()
     overrides = dict()
+    image_tags = list()
     for base_name in recipe.recipe_base:
         base = recipes.get(base_name)
         if base is None:
             raise ConfigError(
                 f'recipe "{recipe.name}" recipe_base names unknown '
                 f'recipe "{base_name}"')
-        base_stack, base_overrides = _resolve_chain(base, recipes, path)
+        base_stack, base_overrides, base_tags = _resolve_chain(base, recipes, path)
         stack += base_stack
         _merge_overrides(overrides, base_overrides)
+        for tag in base_tags:
+            if tag not in image_tags:
+                image_tags.append(tag)
 
     stack += list(recipe.stack)
     _merge_overrides(overrides, recipe.layer_vars)
-    return stack, overrides
+    for tag in recipe.image_tags:
+        if tag not in image_tags:
+            image_tags.append(tag)
+    return stack, overrides, image_tags
 
 
 def resolve(layers, recipes, name=None, stack=None, sets=None):
@@ -116,11 +129,12 @@ def resolve(layers, recipes, name=None, stack=None, sets=None):
         if recipe is None:
             raise ConfigError(f'no such recipe "{name}"')
         rname = name
-        eff_stack, overrides = _resolve_chain(recipe, recipes, [])
+        eff_stack, overrides, image_tags = _resolve_chain(recipe, recipes, [])
     else:
         rname = "<anonymous>"
         eff_stack = list(stack)
         overrides = dict()
+        image_tags = list()
 
     if sets:
         _merge_overrides(overrides, sets)
@@ -141,7 +155,8 @@ def resolve(layers, recipes, name=None, stack=None, sets=None):
         layer = layers[layer_name]
         resolved[layer_name] = dict(layer.vars, **overrides.get(layer_name, {}))
 
-    return ResolvedRecipe(name=rname, stack=eff_stack, layer_vars=resolved)
+    return ResolvedRecipe(name=rname, stack=eff_stack, layer_vars=resolved,
+                          image_tags=image_tags)
 
 
 def _resolve_caps(caps, variables):

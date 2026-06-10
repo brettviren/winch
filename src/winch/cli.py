@@ -7,12 +7,15 @@ Command line interface to winch.
 import click
 
 from .util import setup_logging, debug, warn, error, self_format, assure_file, SafeDict, looks_like_digest
-from .config import load_many as load_configs, parse as parse_config, ConfigError
+from .config import (load_many as load_configs, parse as parse_config,
+                     parse_runs, ConfigError)
 from .viz import write_dot
 from .graph import Graph, generate_instances, instance_labels
 from .recipe import (resolve as resolve_recipe, parse_set_overrides,
                      validate_capabilities, formatted_provides)
-from .podman import build_image, image_exists, remove_image, image_copy, label_args
+from .runs import resolve_run, build_run_command, split_passthrough
+from .podman import (build_image, image_exists, remove_image, image_copy,
+                     label_args, tag_image, run_image)
 from pathlib import Path
 import functools
 import networkx as nx
@@ -27,12 +30,14 @@ class Main:
         self.paradigm = None
         self.layers = {}
         self.recipes = {}
+        self.runs = {}
         if config is None:
             return
         self.opts = config.pop("winch",{})
         self.config = config
         try:
             self.paradigm, self.layers, self.recipes = parse_config(config)
+            self.runs = parse_runs(config)
         except ConfigError as err:
             raise click.ClickException(str(err))
         if self.paradigm == "old":
@@ -298,6 +303,23 @@ def cmd_list(ctx, name, stack, sets, kind, deps, instances, template, long):
             print(describe(f'recipe {rname}', main.recipes[rname].description))
         return
 
+    if main.paradigm == "new" and long and name and name in main.recipes:
+        try:
+            resolved = resolve_recipe(main.layers, main.recipes, name=name)
+        except ConfigError as err:
+            raise click.ClickException(str(err))
+        print(f'[recipe.{name}]')
+        desc = main.recipes[name].description
+        if desc:
+            print(desc)
+        for tag in resolved.image_tags:
+            target = f'{name}:latest' if tag == "latest" else tag
+            print(f'image: {target}')
+        for lname in resolved.stack:
+            ldesc = main.layers[lname].description
+            print(f'layer {lname:24s}\t{ldesc}' if ldesc else f'layer {lname}')
+        return
+
     graph, inodes = graph_and_inodes(ctx, kind, deps, instances,
                                      name, stack, sets, none_is_all=True)
     for inode in inodes:
@@ -481,6 +503,70 @@ def recipe(ctx, stack, sets, containerfile_attribute, image_attribute,
 
     _build_inodes(graph, inodes, containerfile_attribute, image_attribute,
                   rebuild, force, outpath, args, labels_for=labels_for)
+
+    # Apply any recipe image_tags to the final (leaf) image.  Re-running winch
+    # reassigns a tag of the same name to the freshly built image.
+    if rr.image_tags:
+        leaf_image = graph.data(inodes[-1])[image_attribute]
+        for tag in rr.image_tags:
+            target = f'{rr.name}:latest' if tag == "latest" else tag
+            print(f'tagging {leaf_image} as {target}')
+            tag_image(leaf_image, target)
+
+
+@cli.command("run", context_settings=dict(
+    ignore_unknown_options=True,
+    allow_extra_args=True,
+    # Keep "--" in the passthrough tokens so we can split podman options from
+    # the in-container command ourselves.
+    allow_interspersed_args=False))
+@click.option("--set", "sets", multiple=True, metavar="LAYER.VAR=VALUE",
+              help="Override a layer variable when the run names a recipe "
+                   "(repeatable, highest precedence)")
+@click.option("-n", "--dry-run", is_flag=True, default=False,
+              help="Print the assembled 'podman run' command and do not run it")
+@click.argument("name")
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+@click.pass_context
+def run(ctx, sets, dry_run, name, args):
+    '''
+    Run a built image as described by a [run.NAME] table.
+
+    Tokens after NAME are passed to "podman run" as options (before the image).
+    Tokens after a literal "--" replace the run's configured command:
+
+      winch run NAME [PODMAN_OPTS...] [-- COMMAND...]
+
+    Examples:
+
+      winch run wcph_devel
+      winch run wcph_devel --rm -it
+      winch run wcph_devel --rm -it -- bash -lc 'echo hi'
+    '''
+    main = ctx.obj
+    if main.paradigm != "new":
+        raise click.ClickException(
+            '"winch run" requires a new-paradigm (layer/recipe) config.')
+    if name not in main.runs:
+        known = ", ".join(sorted(main.runs)) or "(none)"
+        raise click.ClickException(
+            f'no such run "{name}".  Known runs: {known}')
+
+    try:
+        overrides = parse_set_overrides(sets)
+        resolved = resolve_run(main.runs[name], main.layers, main.recipes,
+                               sets=overrides)
+    except ConfigError as err:
+        raise click.ClickException(str(err))
+
+    extra_opts, command_override = split_passthrough(args)
+    argv = build_run_command(resolved, extra_opts, command_override)
+
+    if dry_run:
+        import shlex
+        print("podman run " + " ".join(shlex.quote(a) for a in argv))
+        return
+    run_image(argv)
 
 
 @cli.command("render")

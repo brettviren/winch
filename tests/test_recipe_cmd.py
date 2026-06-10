@@ -45,6 +45,13 @@ stack = ["alma", "apt"]
 """
 
 
+TAGS_CFG = NEW_CFG + """
+[recipe.tagged]
+recipe_base = ["r"]
+image_tags = ["latest", "wcph:dev"]
+"""
+
+
 @pytest.fixture
 def stub_podman(monkeypatch):
     '''Record build_image calls; pretend no image exists.'''
@@ -54,6 +61,15 @@ def stub_podman(monkeypatch):
     monkeypatch.setattr(cli_mod, "build_image",
                         lambda image, cpath, *a: calls.append((image, str(cpath), list(a))))
     return calls
+
+
+@pytest.fixture
+def stub_tags(monkeypatch):
+    '''Record tag_image calls.'''
+    tags = []
+    monkeypatch.setattr(cli_mod, "tag_image",
+                        lambda name, tag: tags.append((name, tag)))
+    return tags
 
 
 def run(cfg, *argv):
@@ -98,6 +114,23 @@ def test_build_passes_winch_labels(stub_podman):
     assert "winch.provides=spack,pkg:gcc@v1.1.0" in joined
     # the digest label is the full inode
     assert "winch.digest=" in joined
+
+
+# --- image_tags -------------------------------------------------------------
+
+def test_image_tags_applied_to_leaf(stub_podman, stub_tags):
+    res = run(TAGS_CFG, "tagged")
+    assert res.exit_code == 0, res.output
+    leaf_image = stub_podman[-1][0]          # the final (spack) image
+    # "latest" expands to the recipe name; literal tag is verbatim.
+    assert stub_tags == [(leaf_image, "tagged:latest"),
+                         (leaf_image, "wcph:dev")]
+
+
+def test_no_image_tags_no_tagging(stub_podman, stub_tags):
+    res = run(NEW_CFG, "r")
+    assert res.exit_code == 0, res.output
+    assert stub_tags == []
 
 
 # --- anonymous --stack and --set --------------------------------------------

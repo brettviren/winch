@@ -83,6 +83,18 @@ def build_image(name, containerfile, *args):
     return podman(["build"] + list(args) + ["-t", name, context])
 
 
+def tag_image(name, tag):
+    '''
+    Add an additional tag to an existing image.
+
+    Equivalent to "podman tag NAME TAG".  If TAG already names another image, it
+    is reassigned to NAME (podman moves the tag), so re-running winch overrides
+    any prior tag of the same name.
+    '''
+    podman = which("podman")
+    return podman(["tag", name, tag])
+
+
 def label_args(labels):
     '''
     Return a "podman build" argument list applying the given labels.
@@ -152,6 +164,24 @@ def container_copy(cid, path, outpath='.'):
     '''
     podman = which("podman")
     podman(["cp", f'{cid}:{path}', outpath])
+
+
+def run_image(run_argv):
+    '''
+    Exec "podman run" with the given argument list.
+
+    - run_argv :: the token list that follows "podman run" (options, image,
+      command).
+
+    This replaces the current process with podman (os.execvp) so an interactive
+    container ("-it") attaches directly to the terminal and signals pass through.
+    '''
+    import os
+    import shutil
+    podman = shutil.which("podman")
+    if podman is None:
+        raise FileNotFoundError('no such executable "podman"')
+    os.execvp(podman, [podman, "run"] + list(run_argv))
 
 
 def image_copy(image, path, outpath='.'):
