@@ -206,8 +206,8 @@ RUN /spack/bin/spack env create {env_name}
 RUN /spack/bin/spack -e {env_name} add gcc@15
 RUN /spack/bin/spack -e {env_name} add cmake
 RUN /spack/bin/spack -e {env_name} add {wirecell_spec}
+RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
 RUN /spack/bin/spack -e {env_name} add {phlex_spec}
-RUN /spack/bin/spack -e {env_name} add {arrow_spec}
 RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
 RUN /spack/bin/spack -e {env_name} add {arrow_spec}
 RUN /spack/bin/spack -e {env_name} install -j {requires.host.ncpu}
