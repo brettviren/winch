@@ -21,7 +21,7 @@
 [layer.network_local]
 description = "Network services provided locally"
 provides = ["network"]
-# run spack-mirror-server /path/to/spack-cache --port 8080
+# run in a mirror dir, eg: python3 -m http.server 8080
 spack_cache = "http://host.containers.internal:8080"
 
 [layer.host_small]

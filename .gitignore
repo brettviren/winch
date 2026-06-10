@@ -21,3 +21,9 @@ wheels/
 
 # beads: database lives on the shared Dolt server; .beads/ is local-only
 .beads/
+junk*
+cut*
+*.tar
+.envrc
+
+native

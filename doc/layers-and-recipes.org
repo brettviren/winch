@@ -1,0 +1,60 @@
+#+title: Winch layers and recipes
+
+Winch has two configuration paradigms: "kind graph" and "layers and recipes".  The latter is newer and this document gives a guide.
+
+* Differences between the two configuration paradigms
+
+The primary difference between the "kind graph" and "layers and recipes" (l&r) paradigms is how one composes container images.  The "kind graph" requires building an explicit directed graph composed of k-nodes which then expand to a graph of "i-nodes" (representing concrete image layers).  The "layers and recipes" paradigm allows for construction of the "i-node" graph more indirectly which allows for better composability.
+
+A "layer" stanza describes one image layer either in total isolation or with implied dependencies via =requires= and =provides= variables which are lists of arbitrary strings representing what a layer needs or defines, respectively.  The main job of a layer is to define a =body= variable providing the main part of a Containerfile (the full =containerfile= variable from the kind graph paradigm is also honored).
+
+Then, a "recipe" stanza defines a =stack= variable listing one or more layers.  Building a recipe's stack can itself be factored across recipes as each recipe can define a =recipe_base= that names one or more other recipes' =stack= lists to prepend to its own.  A recipe may also define layer variables, possibly overriding the settings from the layer itself or any recipes listed in =recipe_bas=
+
+The =requires= and =provides= then serve as contract guarantees that winch can check before spending time to start building images.  This allows the user greater freedom to compose but at the cost of needing to assure the final stack satisfyies all =requires=.
+
+* Examples
+
+An official, opinionated and application-specific set of layers and recipes is
+maintained in =winch/lib/*.toml=.  These leverage Spack to build on Debian or Alma
+Linux base OS.  Here shows an example session that exercises them.
+
+Install Spack and use it to build GCC 15
+#+begin_example
+$ winch -c lib/layers.toml -c lib/recipes.toml recipe debian_spack_gcc
+#+end_example
+
+Build Wire-Cell Toolkit as a Spack package
+#+begin_example
+$ winch -c lib/layers.toml -c lib/recipes.toml recipe debian_spack_wirecell
+#+end_example
+
+Build combined Wire-Cell Toolkit and Phlex Framework via a Spack Environment
+#+begin_example
+$ winch -c lib/layers.toml -c lib/recipes.toml recipe debian_spack_wcph
+#+end_example
+
+* Spack buildcache support
+
+A Spack binary mirror can be established for a Spack "buildcache".  This will
+not help when building established winch configuration but it can speed up
+re-building during development of new configuration.
+
+The layers and recipes assume an HTTP server on port 8080 provides the build
+cache mirror directory.  This can most easily be done by running this command in
+that directory:
+
+#+begin_example
+$ cd /path/to/build/cache
+$ python3 -m http.server 8080
+#+end_example
+
+After a successful winch recipe build, you can "push" the packages to the cache
+by running this script provided by the winch source:
+
+#+begin_example
+$ ./spack-buildcache-push.sh --cache /path/to/build/cache
+#+end_example
+
+See its =--help= for more options.  It will use =podman= and =fzf= to find and offer
+choices for the image to use and one or more Spack packages to provide the seeds
+for the packages to "push" to the cache.
