@@ -7,7 +7,7 @@ Command line interface to winch.
 import click
 
 from .util import setup_logging, debug, warn, error, self_format, assure_file, SafeDict, looks_like_digest
-from .config import (load_many as load_configs, parse as parse_config,
+from .config import (load_config, build_search_path, parse as parse_config,
                      parse_runs, ConfigError)
 from .viz import write_dot
 from .graph import Graph, generate_instances, instance_labels
@@ -100,22 +100,27 @@ cmddef = dict(context_settings = dict(auto_envvar_prefix='WINCH',
                                       help_option_names=['-h', '--help']))
 @click.option("-c", "--config", "config",
               multiple=True,
-              help="Specify a config file")
+              help="Specify a config file (may be comma-separated, repeatable)")
+@click.option("-p", "--path", "paths",
+              multiple=True,
+              help="Add a ':'-separated search path for config/include files "
+                   "(repeatable; appended before WINCH_PATH)")
 @click.option("-l","--log-output", multiple=True,
               help="log to a file [default:stdout]")
 @click.option("-L","--log-level", default="info",
               help="set logging level [default:info]")
 @click.group("winch", **cmddef)
 @click.pass_context
-def cli(ctx, config, log_output, log_level):
+def cli(ctx, config, paths, log_output, log_level):
     '''
     winch - Wire-Cell Toolkit image node container harness
     '''
     setup_logging(log_output, log_level)
+    search = build_search_path(paths)
     try:
-        cfg = load_configs(*config)
-    except FileNotFoundError:
-        cfg = None
+        cfg = load_config(config, search)
+    except (FileNotFoundError, ConfigError) as err:
+        raise click.ClickException(str(err))
 
     ctx.obj = Main(cfg)
     return

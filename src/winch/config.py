@@ -94,6 +94,131 @@ def load_many(*paths):
     return cfg
 
 
+def build_search_path(cli_paths=(), env_path=None):
+    '''
+    Build the ordered directory list used to resolve relative config/include
+    file names.
+
+    - cli_paths: the -p/--path option values in flag order; each may be a
+      ":"-separated list of directories.
+    - env_path: the WINCH_PATH value (a ":"-separated list).  If None, it is
+      read from the environment.
+
+    The combined order is every -p directory (in flag order) followed by every
+    WINCH_PATH directory.  This list is consulted only after the current working
+    directory and the context directory during resolution.
+    '''
+    if env_path is None:
+        env_path = os.environ.get("WINCH_PATH")
+    chunks = list(cli_paths)
+    if env_path:
+        chunks.append(env_path)
+    dirs = list()
+    for chunk in chunks:
+        for one in chunk.split(":"):
+            if one:
+                dirs.append(one)
+    return dirs
+
+
+def resolve_config_path(name, context=None, search=()):
+    '''
+    Resolve a config/include file name to an existing path (first-one-wins).
+
+    An absolute name resolves to itself.  A relative name is searched, in order:
+
+      1. the current working directory,
+      2. the context directory (if given) -- the directory of the file whose
+         "include" is being satisfied,
+      3. each directory in search (the -p/--path then WINCH_PATH directories).
+
+    Returns the first existing candidate as a Path.  Raises FileNotFoundError,
+    listing what was tried, if none exist.
+    '''
+    p = Path(name)
+    if p.is_absolute():
+        if p.exists():
+            return p
+        raise FileNotFoundError(f'no such config file: {name}')
+
+    candidates = [Path.cwd() / name]
+    if context is not None:
+        candidates.append(Path(context) / name)
+    for d in search:
+        candidates.append(Path(d) / name)
+
+    for cand in candidates:
+        if cand.exists():
+            return cand
+
+    tried = ", ".join(str(c) for c in candidates)
+    raise FileNotFoundError(f'no such config file "{name}"; tried: {tried}')
+
+
+def _load_file(path, search, seen):
+    '''
+    Load one TOML file (at an already-resolved path), processing its
+    "[winch] include" directive depth-first.
+
+    - seen: set of absolute paths already loaded; guards against include cycles
+      and diamond double-loading (an already-seen file contributes nothing).
+
+    Includes are merged in listed order (later wins over earlier); the file's
+    own content is merged last so it wins over anything it includes.  The
+    "include" key is stripped so it never appears in the resulting config.
+    '''
+    abspath = path.resolve()
+    if abspath in seen:
+        return dict()
+    seen.add(abspath)
+
+    data = tomllib.load(abspath.open('rb'))
+
+    includes = []
+    win = data.get("winch")
+    if isinstance(win, dict) and "include" in win:
+        includes = _as_str_list(win.pop("include"),
+                                f'[winch] include in {abspath}')
+
+    result = dict()
+    context = abspath.parent
+    for inc in includes:
+        incpath = resolve_config_path(inc, context=context, search=search)
+        result = merge(result, _load_file(incpath, search, seen))
+    return merge(result, data)
+
+
+def load_config(config_files=(), search=()):
+    '''
+    Load and merge -c/--config files with include and search-path resolution.
+
+    - config_files: the -c/--config values (each may be comma-separated).  These
+      are resolved with NO context directory (relative names use CWD/search).
+    - search: directories from build_search_path().
+
+    Returns the merged configuration dict, or None when no config files are
+    given and no default winch.toml exists (tolerated; commands report later).
+    A missing explicitly-named file or include raises FileNotFoundError, and a
+    malformed include directive raises ConfigError -- both fail fast.
+    '''
+    names = list()
+    for cf in config_files:
+        names += cf.split(",") if "," in cf else [cf]
+
+    if not names:
+        path = basedir("winch") / "winch.toml"
+        if not path.exists():
+            return None
+        return _load_file(path, search, set())
+
+    seen = set()
+    cfg = dict()
+    for name in names:
+        path = resolve_config_path(name, context=None, search=search)
+        cfg = merge(cfg, _load_file(path, search, seen))
+    return cfg
+
+
 #
 # winch2 "new paradigm": stand-alone [layer.*] fragments composed by [recipe.*]
 # tables.  See doc/winch2-plan.md section 12.  The functions below detect and
