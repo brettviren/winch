@@ -1,0 +1,48 @@
+# This is a winch "runs" configuration file.
+#
+# Each stanza defines an image to run and how to run it.
+#
+# A "run" is named with the stanza title as [run.<runname>] and can be invoked with:
+#
+#   winch run <runname> [PODMAN_OPTS...] [-- COMMAND...]
+#
+# Tokens after <runname> are passed to "podman run" as options (placed before
+# the image).  Tokens after a literal "--" replace the run's configured command.
+# So all of these work:
+#
+#   winch run wcph_devel
+#   winch run wcph_devel --rm -it
+#   winch run wcph_devel --rm -it -- bash -lc 'echo hi'
+#
+# Use "winch run -n/--dry-run <runname> ..." to print the assembled "podman run"
+# command without executing it.
+#
+# The parameters are:
+#
+# - description :: optional string describing the purpose of the run.
+#
+# - image :: an image name, or "recipe.<recipename>" to use the leaf image of a
+#   recipe.  Only the "recipe.*" form makes {layer.*.*} references resolvable.
+#
+# - volumes :: an optional list of volume specs, each becoming a "podman run -v".
+#
+# - podman_args :: an optional list of extra "podman run" option strings.
+#
+# - command :: an optional default in-container command (shell-split), used when
+#   no command is given after "--" on the command line.
+#
+# Any other key (e.g. uid/gid below) is a free run variable usable in f-string
+# markup.  Variables may reference recipe layer variables via {layer.NAME.VAR}
+# and each other via {var}.
+
+[run.wcph_devel]
+description = "Run an image for Wire-Cell and Phlex based development"
+# or, can name an image directly without any 'recipe.' prefix.
+image = "recipe.debian_spack_wcph_devel"
+# reference the UID/GID used to create the "devel" user.
+uid = "{layer.devel_user.uid}"
+gid = "{layer.devel_user.gid}"
+# note: keep-id uses a comma, not a semicolon, between uid and gid.
+podman_args = ["--userns=keep-id:uid={uid},gid={gid}"]
+command = "/bin/bash"
+volumes = ["/home/bviren/dune:/devel:z"]
